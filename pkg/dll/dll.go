@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"unsafe"
 	types "loader/pkg/types"
+	"loader/pkg/wrappers"
 	"golang.org/x/sys/windows"
 )
 
@@ -28,20 +29,19 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 	e_lfanew := *((*uint32)(unsafe.Pointer(dllPtr + 0x3c)))
 	nt_header := (*types.IMAGE_NT_HEADERS64)(unsafe.Pointer(dllPtr + uintptr(e_lfanew)))
 
-	dllBase, err := windows.VirtualAlloc(uintptr(nt_header.OptionalHeader.ImageBase),
-		uintptr(nt_header.OptionalHeader.SizeOfImage),
-		windows.MEM_RESERVE|windows.MEM_COMMIT,
-		windows.PAGE_EXECUTE_READWRITE,
-	)
-	if err != nil {
-		log.Fatalf("[ERROR] VirtualAlloc Failed")
+	dllBase := uintptr(nt_header.OptionalHeader.ImageBase)
+	regionSize := uintptr(nt_header.OptionalHeader.SizeOfImage)
+	status, err := wrappers.NtAllocateVirtualMemory(^uintptr(0), &dllBase, 0, &regionSize, 
+		types.MEM_RESERVE|types.MEM_COMMIT, types.PAGE_READWRITE)
+	if err != nil || status != 0 {
+		log.Fatalf("[ERROR] NtAllocateVirtualMemory Failed: status=0x%X, err=%v", status, err)
 	}
 
 	deltaImageBase := dllBase - uintptr(nt_header.OptionalHeader.ImageBase)
 	var numberOfBytesWritten uintptr
-	err = windows.WriteProcessMemory(windows.CurrentProcess(), dllBase, &dllBytes[0], uintptr(nt_header.OptionalHeader.SizeOfHeaders), &numberOfBytesWritten)
-	if err != nil {
-		log.Fatalf("[ERROR] WriteProcessMemory Failed")
+	status, err = wrappers.NtWriteVirtualMemory(^uintptr(0), dllBase, &dllBytes[0], uintptr(nt_header.OptionalHeader.SizeOfHeaders), &numberOfBytesWritten)
+	if err != nil || status != 0 {
+		log.Fatalf("[ERROR] NtWriteVirtualMemory Failed: status=0x%X, err=%v", status, err)
 	}
 	numberOfSections := int(nt_header.FileHeader.NumberOfSections)
 
@@ -53,17 +53,9 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 		sectionDestination := dllBase + uintptr(section.VirtualAddress)
 		sectionBytes := (*byte)(unsafe.Pointer(dllPtr + uintptr(section.PointerToRawData)))
 
-		err = windows.WriteProcessMemory(windows.CurrentProcess(), sectionDestination, sectionBytes, uintptr(section.SizeOfRawData), &numberOfBytesWritten)
-		if err != nil {
-			log.Fatalf("[ERROR] WriteProcessMemory Failed: %v \n", err)
-		}
-
-		if windows.ByteSliceToString(section.Name[:]) == ".text" {
-			var oldprotect uint32
-			err := windows.VirtualProtect(sectionDestination, uintptr(section.SizeOfRawData), windows.PAGE_EXECUTE_READ, &oldprotect)
-			if err != nil {
-				log.Fatalln("[ERROR] Failed to change memory permissions")
-			}
+		status, err = wrappers.NtWriteVirtualMemory(^uintptr(0), sectionDestination, sectionBytes, uintptr(section.SizeOfRawData), &numberOfBytesWritten)
+		if err != nil || status != 0 {
+			log.Fatalf("[ERROR] NtWriteVirtualMemory Failed: status=0x%X, err=%v", status, err)
 		}
 		sectionAddr += unsafe.Sizeof(*section)
 	}
@@ -94,16 +86,16 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 			byteSlice := make([]byte, unsafe.Sizeof(size))
 			relocationRVA := relocation_block.PageAddress + uint32(relocationEntry.Offset())
 
-			err = windows.ReadProcessMemory(windows.CurrentProcess(), dllBase+uintptr(relocationRVA), &byteSlice[0], unsafe.Sizeof(size), nil)
-			if err != nil {
-				log.Fatalf("[ERROR] Failed to ReadProcessMemory")
+			status, err = wrappers.NtReadVirtualMemory(^uintptr(0), dllBase+uintptr(relocationRVA), &byteSlice[0], unsafe.Sizeof(size), nil)
+			if err != nil || status != 0 {
+				log.Fatalf("[ERROR] Failed to NtReadVirtualMemory: status=0x%X, err=%v", status, err)
 			}
 			addressToPatch := uintptr(binary.LittleEndian.Uint64(byteSlice))
 			addressToPatch += deltaImageBase
 			a2Patch := uintptrToBytes(addressToPatch)
-			err = windows.WriteProcessMemory(windows.CurrentProcess(), dllBase+uintptr(relocationRVA), &a2Patch[0], uintptr(len(a2Patch)), nil)
-			if err != nil {
-				log.Fatalf("[ERROR] Failed to WriteProcessMemory")
+			status, err = wrappers.NtWriteVirtualMemory(^uintptr(0), dllBase+uintptr(relocationRVA), &a2Patch[0], uintptr(len(a2Patch)), nil)
+			if err != nil || status != 0 {
+				log.Fatalf("[ERROR] Failed to NtWriteVirtualMemory: status=0x%X, err=%v", status, err)
 			}
 
 		}
@@ -140,14 +132,23 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 			}
 			procBytes := uintptrToBytes(proc)
 			var numberOfBytesWritten uintptr
-			err = windows.WriteProcessMemory(windows.CurrentProcess(), addr, &procBytes[0], uintptr(len(procBytes)), &numberOfBytesWritten)
-			if err != nil {
-				log.Fatalln("[ERROR] Failed to WriteProcessMemory")
+			status, err = wrappers.NtWriteVirtualMemory(^uintptr(0), addr, &procBytes[0], uintptr(len(procBytes)), &numberOfBytesWritten)
+			if err != nil || status != 0 {
+				log.Fatalf("[ERROR] Failed to NtWriteVirtualMemory: status=0x%X, err=%v", status, err)
 			}
 			addr += 0x8
 
 		}
 		importDescriptorAddr += 0x14
+	}
+
+	// Change memory protection from RW to RX now that we're done writing
+	baseAddr := dllBase
+	regionSize = uintptr(nt_header.OptionalHeader.SizeOfImage)
+	var oldProtect uint32
+	status, err = wrappers.NtProtectVirtualMemory(^uintptr(0), &baseAddr, &regionSize, types.PAGE_EXECUTE_READ, &oldProtect)
+	if err != nil || status != 0 {
+		log.Fatalf("[ERROR] NtProtectVirtualMemory Failed: status=0x%X, err=%v", status, err)
 	}
 
 	exportsDirectory := nt_header.OptionalHeader.DataDirectory[types.IMAGE_DIRECTORY_ENTRY_EXPORT]
@@ -209,9 +210,11 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 		syscall.SyscallN(dllBase+uintptr(nt_header.OptionalHeader.AddressOfEntryPoint), dllBase, types.DLL_PROCESS_ATTACH, 0)
 	}
 
-	err = windows.VirtualFree(dllBase, 0x0, windows.MEM_RELEASE)
-	if err != nil {
-		log.Fatalln("[ERROR] Failed to Free Memory")
+	baseAddr = dllBase
+	regionSize = 0
+	status, err = wrappers.NtFreeVirtualMemory(^uintptr(0), &baseAddr, &regionSize, types.MEM_RELEASE)
+	if err != nil || status != 0 {
+		log.Fatalf("[ERROR] NtFreeVirtualMemory Failed: status=0x%X, err=%v", status, err)
 	}
 	return nil
 }

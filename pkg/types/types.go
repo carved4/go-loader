@@ -11,6 +11,21 @@ const (
 	IMAGE_DIRECTORY_ENTRY_IMPORT    = 0x1
 	IMAGE_DIRECTORY_ENTRY_BASERELOC = 0x5
 	DLL_PROCESS_ATTACH              = 0x1
+	
+	// VEH Exception handling constants
+	STATUS_ACCESS_VIOLATION         = 0xC0000005
+	STATUS_PROCEDURE_NOT_FOUND      = 0xC000007A
+	EXCEPTION_CONTINUE_SEARCH       = 0x0
+	EXCEPTION_CONTINUE_EXECUTION    = 0x1
+	
+	// Memory constants
+	MEM_COMMIT     = 0x00001000
+	MEM_RESERVE    = 0x00002000
+	MEM_RELEASE    = 0x00008000
+	PAGE_NOACCESS  = 0x01
+	PAGE_EXECUTE_READWRITE = 0x40
+	PAGE_READWRITE = 0x04
+	PAGE_EXECUTE_READ = 0x20
 )
 
 type ULONGLONG uint64
@@ -176,6 +191,21 @@ func (r *ImageReloc) GetOffset() uint16 {
 	return r.Data & 0xFFF
 }
 
+// VEH Exception handling structures (future)
+type EXCEPTION_RECORD struct {
+	ExceptionCode        uint32
+	ExceptionFlags       uint32
+	ExceptionRecord      *EXCEPTION_RECORD
+	ExceptionAddress     uintptr
+	NumberParameters     uint32
+	ExceptionInformation [15]uintptr
+}
+
+type EXCEPTION_POINTERS struct {
+	ExceptionRecord *EXCEPTION_RECORD
+	ContextRecord   *CONTEXT
+}
+
 func NtH(baseAddress uintptr) *IMAGE_NT_HEADERS {
 	dosHeader := (*IMAGE_DOS_HEADER)(unsafe.Pointer(baseAddress))
 	return (*IMAGE_NT_HEADERS)(unsafe.Pointer(baseAddress + uintptr(dosHeader.E_lfanew)))
@@ -254,4 +284,63 @@ func Contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+type M128A struct {
+	Low  uint64
+	High int64
+}
+
+type CONTEXT struct {
+	P1Home               uint64
+	P2Home               uint64
+	P3Home               uint64
+	P4Home               uint64
+	P5Home               uint64
+	P6Home               uint64
+	ContextFlags         uint32
+	MxCsr                uint32
+	SegCs                uint16
+	SegDs                uint16
+	SegEs                uint16
+	SegFs                uint16
+	SegGs                uint16
+	SegSs                uint16
+	EFlags               uint32
+	Dr0                  uint64
+	Dr1                  uint64
+	Dr2                  uint64
+	Dr3                  uint64
+	Dr6                  uint64
+	Dr7                  uint64
+	Rax                  uint64
+	Rcx                  uint64
+	Rdx                  uint64
+	Rbx                  uint64
+	Rsp                  uint64
+	Rbp                  uint64
+	Rsi                  uint64
+	Rdi                  uint64
+	R8                   uint64
+	R9                   uint64
+	R10                  uint64
+	R11                  uint64
+	R12                  uint64
+	R13                  uint64
+	R14                  uint64
+	R15                  uint64
+	Rip                  uint64
+	VectorRegister       [26]M128A
+	VectorControl        uint64
+	DebugControl         uint64
+	LastBranchToRip      uint64
+	LastBranchFromRip    uint64
+	LastExceptionToRip   uint64
+	LastExceptionFromRip uint64
+}
+
+type UString struct {
+	Length        uint32
+	MaximumLength uint32
+	Buffer        *byte // This corresponds to PUCHAR in C
 }

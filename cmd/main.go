@@ -14,7 +14,6 @@ import (
 
 func main() {
 	winapi.UnhookNtdll()
-	winapi.ApplyAllPatches()
 
 	ekko.EkkoSleep(100)
 

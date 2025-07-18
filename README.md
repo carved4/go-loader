@@ -28,4 +28,4 @@ this project implements full reflective loading of pe files, dlls, and shellcode
 
 - [@timwhitez/Doge-MemX](https://github.com/timwhitez/Doge-MemX) for pe loader code that i adapted
 - [@scriptchildie/goDLLrefletiveloader](https://github.com/scriptchildie/goDLLrefletiveloader) for dll loading code that i fixed forwarded functions and some other small issues
-- [@scriptchildie/goEkko](https://github.com/scriptchildie/goEkko) for ekko sleep implementation that i adapted
+- [@scriptchildie/goEkko](https://github.com/scriptchildie/goEkko) for ekko sleep implementation 

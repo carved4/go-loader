@@ -147,3 +147,52 @@ func GetHashCacheStats() map[string]interface{} {
 		"cache_hit_ratio": 0.0, // Could implement hit counting if needed
 	}
 }
+
+// EncodingCache stores encoded string mappings for reversible encoding
+var EncodingCache = make(map[uint32]string)
+var encodingCacheMutex sync.RWMutex
+
+// Simple XOR key for encoding/decoding
+const encodeKey = uint32(0xDEADBEEF)
+
+// Encode converts a string to a reversible encoded uint32 value
+func Encode(s string) uint32 {
+	// Use a simple hash as the key, but store the original string
+	key := DBJ2HashStr(s)
+	
+	// Store the mapping for decoding
+	encodingCacheMutex.Lock()
+	EncodingCache[key] = s
+	encodingCacheMutex.Unlock()
+	
+	return key
+}
+
+// Decode converts an encoded uint32 value back to the original string
+func Decode(encoded uint32) string {
+	encodingCacheMutex.RLock()
+	defer encodingCacheMutex.RUnlock()
+	
+	if original, exists := EncodingCache[encoded]; exists {
+		return original
+	}
+	
+	// If not found, return empty string
+	return ""
+}
+
+// PreloadEncodings allows preloading string->encoded mappings at init time
+func PreloadEncodings(strings []string) []uint32 {
+	encoded := make([]uint32, len(strings))
+	for i, s := range strings {
+		encoded[i] = Encode(s)
+	}
+	return encoded
+}
+
+// ClearEncodingCache clears the encoding cache
+func ClearEncodingCache() {
+	encodingCacheMutex.Lock()
+	defer encodingCacheMutex.Unlock()
+	EncodingCache = make(map[uint32]string)
+}

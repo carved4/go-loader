@@ -28,6 +28,9 @@ this project implements full reflective loading of pe files, dlls, and shellcode
 ## use this pattern for a more reliable form of evasion
 
 ```go
+    // import pkg/net and pkg/patch
+    patch.ETW
+    patch.AMSI
 	addr, size, err := net.GetGlobalBufferRegion()
 	if err != nil {
 		log.Fatalf("[ERROR] Failed to get global buffer region: %v\n", err)

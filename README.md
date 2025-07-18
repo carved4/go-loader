@@ -2,8 +2,11 @@
 
 a pe/dll/shellcode loader that downloads and executes files from urls in memory
 
+## demo
+![demo (2)](https://github.com/user-attachments/assets/587895f5-7d6c-4825-a4da-d61796546cbe)
+
+
 ## usage
-![demo](https://github.com/user-attachments/assets/9f45cf71-1578-4393-94d6-7cc5475870d3)
 
 
 ```bash

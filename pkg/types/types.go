@@ -26,6 +26,17 @@ const (
 	PAGE_EXECUTE_READWRITE = 0x40
 	PAGE_READWRITE = 0x04
 	PAGE_EXECUTE_READ = 0x20
+	PAGE_READONLY = 0x02
+	
+	// SystemFunction / RtlEncryptMemory constants
+	RTL_ENCRYPT_OPTION_SAME_PROCESS   = 0x01
+	RTL_ENCRYPT_OPTION_CROSS_PROCESS  = 0x02
+	RTL_ENCRYPT_OPTION_SAME_LOGON     = 0x04
+	RTL_ENCRYPT_MEMORY_SIZE           = 0x08  // 8 bytes minimum
+	
+	// Thread access rights
+	THREAD_SUSPEND_RESUME = 0x0002
+	THREAD_ALL_ACCESS     = 0x1FFFFF
 )
 
 type ULONGLONG uint64
@@ -343,4 +354,10 @@ type UString struct {
 	Length        uint32
 	MaximumLength uint32
 	Buffer        *byte // This corresponds to PUCHAR in C
+}
+
+// CLIENT_ID structure for NT thread operations
+type CLIENT_ID struct {
+	UniqueProcess uintptr
+	UniqueThread  uintptr
 }

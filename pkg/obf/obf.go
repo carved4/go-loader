@@ -19,14 +19,10 @@ func DBJ2Hash(buffer []byte) uint32 {
 		if b == 0 {
 			continue
 		}
-		
-		// Convert lowercase to uppercase (same as in the Rust version)
 		if b >= 'a' {
 			b -= 0x20
 		}
 		
-		// This is equivalent to: hash = ((hash << 5) + hash) + uint32(b)
-		// The wrapping_add in Rust is naturally handled in Go's uint32
 		hash = ((hash << 5) + hash) + uint32(b)
 	}
 	

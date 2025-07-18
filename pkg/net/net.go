@@ -16,6 +16,33 @@ import (
 // Global buffer to prevent GC during execution
 var globalBuffer []byte
 
+// GetGlobalBufferRegion returns the memory address and size of the global buffer
+// This can be used with EncryptMemoryRegion to encrypt the downloaded data
+func GetGlobalBufferRegion() (uintptr, uint32, error) {
+	if globalBuffer == nil || len(globalBuffer) == 0 {
+		return 0, 0, fmt.Errorf("global buffer is empty or not initialized")
+	}
+	
+	// Get the memory address of the global buffer
+	bufferAddr := uintptr(unsafe.Pointer(&globalBuffer[0]))
+	bufferSize := uint32(len(globalBuffer))
+	
+	return bufferAddr, bufferSize, nil
+}
+
+// FindBufferRegion finds the memory address and size of any byte slice
+// This is a generic helper that can find the region of any buffer
+func FindBufferRegion(buffer []byte) (uintptr, uint32, error) {
+	if buffer == nil || len(buffer) == 0 {
+		return 0, 0, fmt.Errorf("buffer is empty or nil")
+	}
+	
+	bufferAddr := uintptr(unsafe.Pointer(&buffer[0]))
+	bufferSize := uint32(len(buffer))
+	
+	return bufferAddr, bufferSize, nil
+}
+
 var userAgents = []string{
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",

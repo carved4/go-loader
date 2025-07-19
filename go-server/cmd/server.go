@@ -34,7 +34,7 @@ const (
 	NonceLength      = 12    
 	DefaultPort      = 8000  
 	// CHANGE THIS AFTER RUNNING THE SSH TUNNEL :3
-	PinggyLink       = "http://rnirw-24-53-136-186.a.free.pinggy.link:43887" 
+	PinggyLink       = "http://<generated-link>/payloads/" 
 )
 
 

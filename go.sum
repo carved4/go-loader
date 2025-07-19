@@ -2,5 +2,3 @@ github.com/Binject/debug v0.0.0-20230508195519-26db73212a7a h1:4c0nc0krv8eh7gD80
 github.com/Binject/debug v0.0.0-20230508195519-26db73212a7a/go.mod h1:QzgxDLY/qdKlvnbnb65eqTedhvQPbaSP2NqIbcuKvsQ=
 github.com/carved4/go-native-syscall v1.3.3 h1:WeP5F8mlNo/ri5J0ozyyPUdd0tGQ8EhSW3drWdqYsy8=
 github.com/carved4/go-native-syscall v1.3.3/go.mod h1:WFMevC/rEPLUGjTJW57iez1x+OFq253TvA5xPDmifEM=
-golang.org/x/sys v0.34.0 h1:H5Y5sJ2L2JRdyv7ROF1he/lPdvFsd0mJHFw2ThKHxLA=
-golang.org/x/sys v0.34.0/go.mod h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=

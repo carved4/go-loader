@@ -62,10 +62,12 @@ if err != nil {
 >also changed chunk count of server, but you can update that according to your needs
 
 ## unstable detection 7/21/2025
+https://www.virustotal.com/gui/file/c33b9c802da27d5383d58c3512e53679740acd9531424260c19aba5cc269fc7d
 <img width="1216" height="871" alt="image" src="https://github.com/user-attachments/assets/f6e7a374-a10b-40b7-b003-49776a1b9b96" />
 
 
 ## stable detection 7/21/2025
+https://www.virustotal.com/gui/file/c694af1f432187bab7078f32b40a49f9c6fa8557bb6739476f7426c42ab4a9fe/behavior
 <img width="1204" height="865" alt="image" src="https://github.com/user-attachments/assets/b27ecd4e-2f5f-4c08-aa31-d4d0c223acc1" />
 
 >yes this is now burnt, no I do not care, you shouldn't be using them for cybercrime anyways, research is more fun!

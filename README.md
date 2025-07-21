@@ -60,6 +60,18 @@ if err != nil {
 >i stole go's amstdcall plan9 asm and used it as wincall :)
 >unstable also removed ekko sleep, it just .. doesnt work with the new changes
 >also changed chunk count of server, but you can update that according to your needs
+
+## unstable detection 7/21/2025
+<img width="1216" height="871" alt="image" src="https://github.com/user-attachments/assets/f6e7a374-a10b-40b7-b003-49776a1b9b96" />
+
+
+## stable detection 7/21/2025
+<img width="1204" height="865" alt="image" src="https://github.com/user-attachments/assets/b27ecd4e-2f5f-4c08-aa31-d4d0c223acc1" />
+
+>yes this is now burnt, no I do not care, you shouldn't be using them for cybercrime anyways, research is more fun!
+
+
+
 ## credits
 
 - [@timwhitez/Doge-MemX](https://github.com/timwhitez/Doge-MemX) for pe loader code that i adapted

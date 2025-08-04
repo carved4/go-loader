@@ -56,11 +56,7 @@ if err != nil {
 }
 
 ```
->unstable branch offers loading of dlls both reflectively and to help the PE loader resolve imports without importing or using syscall
->i stole go's amstdcall plan9 asm and used it as wincall :)
->unstable also removed ekko sleep, it just .. doesnt work with the new changes
->also changed chunk count of server, but you can update that according to your needs
-## credits
+
 
 - [@timwhitez/Doge-MemX](https://github.com/timwhitez/Doge-MemX) for pe loader code that i adapted
 - [@scriptchildie/goDLLrefletiveloader](https://github.com/scriptchildie/goDLLrefletiveloader) for dll loading code that i fixed forwarded functions and some other small issues

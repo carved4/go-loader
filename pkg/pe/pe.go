@@ -2,11 +2,11 @@ package pe
 
 import (
 	"bytes"
+	api "github.com/carved4/go-wincall"
 	"github.com/Binject/debug/pe"
 	"encoding/binary"
 	"fmt"
 	"io/ioutil"
-	"syscall"
 	"unsafe"
 	"loader/pkg/types"
 	"loader/pkg/wrappers"
@@ -63,26 +63,23 @@ func resolveForwardedExport(forwarderString string) (uintptr, error) {
 	if !strings.HasSuffix(strings.ToLower(targetDLL), ".dll") {
 		targetDLL += ".dll"
 	}
-
-	dllHandle, err := syscall.LoadLibrary(targetDLL)
-	if err != nil {
-		return 0, fmt.Errorf("[ERROR] failed to load target DLL %s: %v", targetDLL, err)
-	}
+	dllHandle := api.LoadLibraryW(targetDLL)
 
 	var funcAddr uintptr
+	var err error
 	if strings.HasPrefix(targetFunction, "#") {
 		ordinalStr := targetFunction[1:]
 		ordinal, err := strconv.Atoi(ordinalStr)
 		if err != nil {
 			return 0, fmt.Errorf("[ERROR] invalid ordinal in forwarder: %s", targetFunction)
 		}
-		funcAddr, err = types.GetProcAddress(unsafe.Pointer(dllHandle), unsafe.Pointer(uintptr(ordinal)))
+		funcAddr, err = api.Call("kernel32.dll", "GetProcAddress", dllHandle, uintptr(ordinal))
 		if err != nil {
 			return 0, fmt.Errorf("[ERROR] failed to get ordinal %d from %s: %v", ordinal, targetDLL, err)
 		}
 	} else {
 		funcNameBytes := append([]byte(targetFunction), 0)
-		funcAddr, err = types.GetProcAddress(unsafe.Pointer(dllHandle), unsafe.Pointer(&funcNameBytes[0]))
+		funcAddr, err = api.Call("kernel32.dll", "GetProcAddress", dllHandle, uintptr(unsafe.Pointer(&funcNameBytes[0])))
 		if err != nil {
 			return 0, fmt.Errorf("[ERROR] failed to get function %s from %s: %v", targetFunction, targetDLL, err)
 		}
@@ -173,10 +170,8 @@ func fixImportAddressTable(baseAddress uintptr, peFile *pe.File) error {
 	for _, importDir := range importDirs {
 		dllName := importDir.DllName
 
-		dllHandle, err := syscall.LoadLibrary(dllName)
-		if err != nil {
-			return fmt.Errorf("[ERROR] failed to load library %s: %v", dllName, err)
-		}
+		dllHandle := api.LoadLibraryW(dllName)
+
 
 		firstThunk := baseAddress + uintptr(importDir.FirstThunk)
 		originalThunk := baseAddress + uintptr(importDir.OriginalFirstThunk)
@@ -202,7 +197,7 @@ func fixImportAddressTable(baseAddress uintptr, peFile *pe.File) error {
 				funcNamePtr, funcName = types.ParseFuncAddress(baseAddress, oftThunk.AddressOfData)
 			}
 
-			procAddr, err := types.GetProcAddress(unsafe.Pointer(dllHandle), funcNamePtr)
+			procAddr, err := api.Call("kernel32.dll", "GetProcAddress", dllHandle, uintptr(funcNamePtr))
 			if err != nil {
 				forwarderAddr, isForwarded := checkForwardedExportByName(unsafe.Pointer(dllHandle), funcName)
 				if isForwarded {

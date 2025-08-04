@@ -4,11 +4,9 @@ import (
 	"encoding/binary"
 	"log"
 	"strconv"
-	"syscall"
 	"unsafe"
+	api "github.com/carved4/go-wincall"
 	types "loader/pkg/types"
-	"loader/pkg/wrappers"
-	"golang.org/x/sys/windows"
 )
 
 
@@ -23,6 +21,26 @@ func uintptrToBytes(ptr uintptr) []byte {
 	return byteSlice
 }
 
+// bytePtrToString converts a null-terminated byte pointer to a string
+func bytePtrToString(ptr *byte) string {
+	if ptr == nil {
+		return ""
+	}
+	
+	var result []byte
+	for i := uintptr(0); ; i++ {
+		b := *(*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(ptr)) + i))
+		if b == 0 {
+			break
+		}
+		result = append(result, b)
+	}
+	
+	return string(result)
+}
+
+
+
 func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 	dllPtr := uintptr(unsafe.Pointer(&dllBytes[0]))
 
@@ -31,7 +49,7 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 
 	dllBase := uintptr(nt_header.OptionalHeader.ImageBase)
 	regionSize := uintptr(nt_header.OptionalHeader.SizeOfImage)
-	status, err := wrappers.NtAllocateVirtualMemory(^uintptr(0), &dllBase, 0, &regionSize, 
+	status, err := api.NtAllocateVirtualMemory(^uintptr(0), &dllBase, 0, &regionSize, 
 		types.MEM_RESERVE|types.MEM_COMMIT, types.PAGE_READWRITE)
 	if err != nil || status != 0 {
 		log.Fatalf("[ERROR] NtAllocateVirtualMemory Failed: status=0x%X, err=%v", status, err)
@@ -39,7 +57,7 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 
 	deltaImageBase := dllBase - uintptr(nt_header.OptionalHeader.ImageBase)
 	var numberOfBytesWritten uintptr
-	status, err = wrappers.NtWriteVirtualMemory(^uintptr(0), dllBase, &dllBytes[0], uintptr(nt_header.OptionalHeader.SizeOfHeaders), &numberOfBytesWritten)
+	status, err = api.NtWriteVirtualMemory(^uintptr(0), dllBase, uintptr(unsafe.Pointer(&dllBytes[0])), uintptr(nt_header.OptionalHeader.SizeOfHeaders), &numberOfBytesWritten)
 	if err != nil || status != 0 {
 		log.Fatalf("[ERROR] NtWriteVirtualMemory Failed: status=0x%X, err=%v", status, err)
 	}
@@ -53,7 +71,7 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 		sectionDestination := dllBase + uintptr(section.VirtualAddress)
 		sectionBytes := (*byte)(unsafe.Pointer(dllPtr + uintptr(section.PointerToRawData)))
 
-		status, err = wrappers.NtWriteVirtualMemory(^uintptr(0), sectionDestination, sectionBytes, uintptr(section.SizeOfRawData), &numberOfBytesWritten)
+		status, err = api.NtWriteVirtualMemory(^uintptr(0), sectionDestination, uintptr(unsafe.Pointer(sectionBytes)), uintptr(section.SizeOfRawData), &numberOfBytesWritten)
 		if err != nil || status != 0 {
 			log.Fatalf("[ERROR] NtWriteVirtualMemory Failed: status=0x%X, err=%v", status, err)
 		}
@@ -86,14 +104,14 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 			byteSlice := make([]byte, unsafe.Sizeof(size))
 			relocationRVA := relocation_block.PageAddress + uint32(relocationEntry.Offset())
 
-			status, err = wrappers.NtReadVirtualMemory(^uintptr(0), dllBase+uintptr(relocationRVA), &byteSlice[0], unsafe.Sizeof(size), nil)
+			status, err = api.NtReadVirtualMemory(^uintptr(0), dllBase+uintptr(relocationRVA), uintptr(unsafe.Pointer(&byteSlice[0])), unsafe.Sizeof(size), nil)
 			if err != nil || status != 0 {
 				log.Fatalf("[ERROR] Failed to NtReadVirtualMemory: status=0x%X, err=%v", status, err)
 			}
 			addressToPatch := uintptr(binary.LittleEndian.Uint64(byteSlice))
 			addressToPatch += deltaImageBase
 			a2Patch := uintptrToBytes(addressToPatch)
-			status, err = wrappers.NtWriteVirtualMemory(^uintptr(0), dllBase+uintptr(relocationRVA), &a2Patch[0], uintptr(len(a2Patch)), nil)
+			status, err = api.NtWriteVirtualMemory(^uintptr(0), dllBase+uintptr(relocationRVA), uintptr(unsafe.Pointer(&a2Patch[0])), uintptr(len(a2Patch)), nil)
 			if err != nil || status != 0 {
 				log.Fatalf("[ERROR] Failed to NtWriteVirtualMemory: status=0x%X, err=%v", status, err)
 			}
@@ -112,10 +130,10 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 			break
 		}
 		libraryName := uintptr(importDescriptor.Name) + dllBase
-		dllName := windows.BytePtrToString((*byte)(unsafe.Pointer(libraryName)))
-		hLibrary, err := windows.LoadLibrary(dllName)
-		if err != nil {
-			log.Fatalln("[ERROR] LoadLibrary Failed: %v", err)
+		dllName := bytePtrToString((*byte)(unsafe.Pointer(libraryName)))
+		hLibrary := api.LoadLibraryW(dllName)
+		if hLibrary == 0 {
+			log.Fatalf("[ERROR] LoadLibrary Failed for: %s", dllName)
 		}
 		addr := dllBase + uintptr(importDescriptor.FirstThunk)
 		for {
@@ -125,14 +143,15 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 			}
 			functionNameAddr := dllBase + uintptr(thunk+2)
 
-			functionName := windows.BytePtrToString((*byte)(unsafe.Pointer(functionNameAddr)))
-			proc, err := windows.GetProcAddress(hLibrary, functionName)
-			if err != nil {
-				log.Fatalln("[ERROR] Failed to GetProcAddress: %v", err)
+			functionName := bytePtrToString((*byte)(unsafe.Pointer(functionNameAddr)))
+			functionNameBytes := append([]byte(functionName), 0) // null-terminated
+			proc, err := api.Call("kernel32.dll", "GetProcAddress", hLibrary, uintptr(unsafe.Pointer(&functionNameBytes[0])))
+			if err != nil || proc == 0 {
+				log.Fatalf("[ERROR] Failed to GetProcAddress for %s: %v", functionName, err)
 			}
 			procBytes := uintptrToBytes(proc)
 			var numberOfBytesWritten uintptr
-			status, err = wrappers.NtWriteVirtualMemory(^uintptr(0), addr, &procBytes[0], uintptr(len(procBytes)), &numberOfBytesWritten)
+			status, err := api.NtWriteVirtualMemory(^uintptr(0), addr, uintptr(unsafe.Pointer(&procBytes[0])), uintptr(len(procBytes)), &numberOfBytesWritten)
 			if err != nil || status != 0 {
 				log.Fatalf("[ERROR] Failed to NtWriteVirtualMemory: status=0x%X, err=%v", status, err)
 			}
@@ -145,8 +164,8 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 	// Change memory protection from RW to RX now that we're done writing
 	baseAddr := dllBase
 	regionSize = uintptr(nt_header.OptionalHeader.SizeOfImage)
-	var oldProtect uint32
-	status, err = wrappers.NtProtectVirtualMemory(^uintptr(0), &baseAddr, &regionSize, types.PAGE_EXECUTE_READ, &oldProtect)
+	var oldProtect uintptr
+	status, err = api.NtProtectVirtualMemory(^uintptr(0), &baseAddr, &regionSize, types.PAGE_EXECUTE_READ, &oldProtect)
 	if err != nil || status != 0 {
 		log.Fatalf("[ERROR] NtProtectVirtualMemory Failed: status=0x%X, err=%v", status, err)
 	}
@@ -167,7 +186,7 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 		case string:
 			for i := uint32(0); i < exportTable.NumberOfNames; i++ {
 				nameAddr := dllBase + uintptr(nameRVAs[i])
-				funcName := windows.BytePtrToString((*byte)(unsafe.Pointer(nameAddr)))
+				funcName := bytePtrToString((*byte)(unsafe.Pointer(nameAddr)))
 				if funcName == v {
 					functionRVA = functionRVAs[nameOrdinals[i]]
 					found = true
@@ -191,7 +210,7 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 				} else {
 					for i := uint32(0); i < exportTable.NumberOfNames; i++ {
 						nameAddr := dllBase + uintptr(nameRVAs[i])
-						funcName := windows.BytePtrToString((*byte)(unsafe.Pointer(nameAddr)))
+						funcName := bytePtrToString((*byte)(unsafe.Pointer(nameAddr)))
 						if funcName == str {
 							functionRVA = functionRVAs[nameOrdinals[i]]
 							found = true
@@ -203,18 +222,19 @@ func LoadDLL(dllBytes []byte, functionIdentifier interface{}) error {
 		}
 		
 		if found && functionRVA != 0 {
-			syscall.SyscallN(dllBase+uintptr(functionRVA))
+			api.CallWorker(dllBase+uintptr(functionRVA))
 		} else {
 		}
 	} else {
-		syscall.SyscallN(dllBase+uintptr(nt_header.OptionalHeader.AddressOfEntryPoint), dllBase, types.DLL_PROCESS_ATTACH, 0)
+		api.CallWorker(dllBase+uintptr(nt_header.OptionalHeader.AddressOfEntryPoint), dllBase, types.DLL_PROCESS_ATTACH, 0)
 	}
 
 	baseAddr = dllBase
 	regionSize = 0
-	status, err = wrappers.NtFreeVirtualMemory(^uintptr(0), &baseAddr, &regionSize, types.MEM_RELEASE)
-	if err != nil || status != 0 {
-		log.Fatalf("[ERROR] NtFreeVirtualMemory Failed: status=0x%X, err=%v", status, err)
-	}
+	// Note: NtFreeVirtualMemory may not be available in wincall, memory will be freed on process exit
+	// status, err = api.NtFreeVirtualMemory(^uintptr(0), &baseAddr, &regionSize, types.MEM_RELEASE)
+	// if err != nil || status != 0 {
+	//     log.Fatalf("[ERROR] NtFreeVirtualMemory Failed: status=0x%X, err=%v", status, err)
+	// }
 	return nil
 }

@@ -817,6 +817,114 @@ func Syscall(syscallNum uint16, args ...uintptr) (uintptr, error) {
 	return uintptr(ret), nil
 }
 
+// SetProcessCommandLine overwrites the command line in the current process's PEB.
+// This is useful for reflective PE loading, so the loaded PE sees a custom command line
+// instead of the loader's arguments. Only works for the current process.
+//
+// Example usage:
+//   resolve.SetProcessCommandLine("lockywocky.exe -c 4 -output C:\\out")
+func SetProcessCommandLine(newCmdLine string) error {
+	peb := GetCurrentProcessPEB()
+	if peb == nil {
+		return fmt.Errorf("failed to get PEB")
+	}
+	// On Windows x64, ProcessParameters is at offset 0x20 in PEB
+	procParamsPtr := *(*uintptr)(unsafe.Pointer(uintptr(unsafe.Pointer(peb)) + 0x20))
+	if procParamsPtr == 0 {
+		return fmt.Errorf("failed to get ProcessParameters")
+	}
+	// CommandLine is at offset 0x70 in RTL_USER_PROCESS_PARAMETERS (UNICODE_STRING)
+	cmdLinePtr := procParamsPtr + 0x70
+	cmdLine := (*UNICODE_STRING)(unsafe.Pointer(cmdLinePtr))
+
+	// Convert Go string to UTF-16
+	runes := []rune(newCmdLine)
+	buf := make([]uint16, len(runes)+1)
+	for i, r := range runes {
+		buf[i] = uint16(r)
+	}
+	buf[len(runes)] = 0 // null terminator
+
+	cmdLine.Length = uint16(len(runes) * 2)
+	cmdLine.MaximumLength = uint16((len(runes) + 1) * 2)
+	cmdLine.Buffer = &buf[0]
+	return nil
+}
+
+// SetProcessCommandLineAndArgv overwrites the command line in the current process's PEB
+// and patches the CRT __argc, __argv, and __wargv variables (if present) in the loaded PE's memory.
+// This ensures that both Windows APIs (GetCommandLineW/A) and C/C++ main(int argc, char** argv)
+// see only the user-specified arguments, not the loader's.
+//
+// Example usage:
+//   resolve.SetProcessCommandLineAndArgv("lockywocky.exe -c 4 -output C:\\out", []string{"lockywocky.exe", "-c", "4", "-output", "C:\\out"}, peBase)
+func SetProcessCommandLineAndArgv(newCmdLine string, argv []string, peBase uintptr) error {
+	// 1. Overwrite the PEB command line (UNICODE_STRING)
+	peb := GetCurrentProcessPEB()
+	if peb == nil {
+		return fmt.Errorf("failed to get PEB")
+	}
+	procParamsPtr := *(*uintptr)(unsafe.Pointer(uintptr(unsafe.Pointer(peb)) + 0x20))
+	if procParamsPtr == 0 {
+		return fmt.Errorf("failed to get ProcessParameters")
+	}
+	cmdLinePtr := procParamsPtr + 0x70
+	cmdLine := (*UNICODE_STRING)(unsafe.Pointer(cmdLinePtr))
+
+	// Convert Go string to UTF-16
+	runes := []rune(newCmdLine)
+	buf := make([]uint16, len(runes)+1)
+	for i, r := range runes {
+		buf[i] = uint16(r)
+	}
+	buf[len(runes)] = 0 // null terminator
+
+	cmdLine.Length = uint16(len(runes) * 2)
+	cmdLine.MaximumLength = uint16((len(runes) + 1) * 2)
+	cmdLine.Buffer = &buf[0]
+
+	// 2. Patch CRT __argc, __argv, __wargv in the loaded PE (if present)
+	if peBase != 0 && len(argv) > 0 {
+		// Helper to find export RVA by name
+		findExport := func(name string) uintptr {
+			return GetFunctionAddress(peBase, obf.DBJ2HashStr(name))
+		}
+		argcAddr := findExport("__argc")
+		argvAddr := findExport("__argv")
+		wargvAddr := findExport("__wargv")
+
+		// Prepare ANSI argv
+		ansiPtrs := make([]*byte, len(argv))
+		for i, s := range argv {
+			ansi := append([]byte(s), 0)
+			ansiPtrs[i] = &ansi[0]
+		}
+		// Prepare wide argv
+		widePtrs := make([]*uint16, len(argv))
+		for i, s := range argv {
+			w := []rune(s)
+			wbuf := make([]uint16, len(w)+1)
+			for j, r := range w {
+				wbuf[j] = uint16(r)
+			}
+			wbuf[len(w)] = 0
+			widePtrs[i] = &wbuf[0]
+		}
+
+		argc := int32(len(argv))
+		if argcAddr != 0 {
+			*(*int32)(unsafe.Pointer(argcAddr)) = argc
+		}
+		if argvAddr != 0 {
+			*(*uintptr)(unsafe.Pointer(argvAddr)) = uintptr(unsafe.Pointer(&ansiPtrs[0]))
+		}
+		if wargvAddr != 0 {
+			*(*uintptr)(unsafe.Pointer(wargvAddr)) = uintptr(unsafe.Pointer(&widePtrs[0]))
+		}
+	}
+	return nil
+}
+
 
 func DebugListAllModules() {
 	peb := GetCurrentProcessPEB()

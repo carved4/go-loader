@@ -11,7 +11,9 @@ import (
 	"loader/pkg/types"
 	"golang.org/x/sys/windows"
 )
-
+/*
+it is very hard to get this rop chain working with my wincall infra, so leaving as is :# use at ur own risk
+*/
 const (
 	WT_EXECUTEINTIMERTHREAD         = 0x00000020
 	ThreadQuerySetWin32StartAddress = 0x9

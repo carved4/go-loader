@@ -2,7 +2,6 @@ package types
 
 import (
 	"fmt"
-	"syscall"
 	"unsafe"
 )
 
@@ -249,24 +248,6 @@ func ParseFuncAddress(baseAddress uintptr, addressOfData uintptr) (unsafe.Pointe
 	return unsafe.Pointer(nameAddr), string(nameBytes)
 }
 
-func GetProcAddress(moduleHandle unsafe.Pointer, procName unsafe.Pointer) (uintptr, error) {
-	if uintptr(procName) <= 0xFFFF {
-		ordinal := uintptr(procName)
-		kernel32 := syscall.NewLazyDLL("kernel32.dll")
-		getProcAddr := kernel32.NewProc("GetProcAddress")
-		
-		ret, _, err := getProcAddr.Call(uintptr(moduleHandle), ordinal)
-		if ret == 0 {
-			return 0, fmt.Errorf("[ERROR] getProcAddress failed for ordinal %d: %v", ordinal, err)
-		}
-		return ret, nil
-	} else {
-		nameBytes := CstrVal(procName)
-		name := string(nameBytes)
-		addr, err := syscall.GetProcAddress(syscall.Handle(uintptr(moduleHandle)), name)
-		return uintptr(addr), err
-	}
-}
 
 func GetRelocTable(ntHeaders *IMAGE_NT_HEADERS) *IMAGE_DATA_DIRECTORY {
 	if ntHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress == 0 {

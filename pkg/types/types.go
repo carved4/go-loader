@@ -283,15 +283,21 @@ type M128A struct {
 	High int64
 }
 
+// CONTEXT structure must be 16-byte aligned for fxsave instruction
 type CONTEXT struct {
+	// Register parameter home addresses
 	P1Home               uint64
 	P2Home               uint64
 	P3Home               uint64
 	P4Home               uint64
 	P5Home               uint64
 	P6Home               uint64
+
+	// Control flags and segment registers
 	ContextFlags         uint32
 	MxCsr                uint32
+
+	// Segment Registers and processor flags
 	SegCs                uint16
 	SegDs                uint16
 	SegEs                uint16
@@ -299,12 +305,16 @@ type CONTEXT struct {
 	SegGs                uint16
 	SegSs                uint16
 	EFlags               uint32
+
+	// Debug registers
 	Dr0                  uint64
 	Dr1                  uint64
 	Dr2                  uint64
 	Dr3                  uint64
 	Dr6                  uint64
 	Dr7                  uint64
+
+	// Integer registers
 	Rax                  uint64
 	Rcx                  uint64
 	Rdx                  uint64
@@ -322,8 +332,16 @@ type CONTEXT struct {
 	R14                  uint64
 	R15                  uint64
 	Rip                  uint64
+
+	// Floating point state (must be 16-byte aligned)
+	_ [8]byte                    // Padding to ensure 16-byte alignment for FltSave
+	FltSave              [512]byte // XSAVE_FORMAT structure
+	
+	// Vector registers
 	VectorRegister       [26]M128A
 	VectorControl        uint64
+
+	// Special debug control registers
 	DebugControl         uint64
 	LastBranchToRip      uint64
 	LastBranchFromRip    uint64
@@ -341,4 +359,15 @@ type UString struct {
 type CLIENT_ID struct {
 	UniqueProcess uintptr
 	UniqueThread  uintptr
+}
+
+// ThreadEntry32 represents THREADENTRY32 structure from tlhelp32.h
+type ThreadEntry32 struct {
+	Size           uint32
+	CntUsage       uint32
+	ThreadID       uint32
+	OwnerProcessID uint32
+	BasePri        int32
+	DeltaPri       int32
+	Flags          uint32
 }
